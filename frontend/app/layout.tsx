@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Navbar from "@/components/layout/Navbar";
 import AuroraBackground from "@/components/common/AuroraBackground";
 
 const geistSans = Geist({
@@ -32,9 +31,7 @@ export default function RootLayout({
       <body className="relative min-h-screen overflow-x-hidden bg-black text-white">
         <AuroraBackground />
 
-        <Navbar />
-
-        <main className="relative z-10 flex-1">
+        <main className="relative z-10 min-h-screen">
           {children}
         </main>
       </body>
