@@ -4,26 +4,29 @@ interface StatCardProps {
   title: string;
   value: string;
   icon: LucideIcon;
+  hint?: string;
 }
 
 export default function StatCard({
   title,
   value,
   icon: Icon,
+  hint,
 }: StatCardProps) {
   return (
-    <div className="group rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-slate-500">
-      <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800">
-        <Icon className="h-6 w-6 text-slate-300" />
+    <div className="group rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-xl transition-all duration-300 hover:border-slate-500">
+      <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800">
+        <Icon className="h-5 w-5 text-slate-300" aria-hidden />
       </div>
 
-      <h2 className="text-3xl font-bold text-white">
+      <p className="text-2xl font-bold tabular-nums text-white">
         {value}
-      </h2>
+      </p>
 
-      <p className="mt-2 text-slate-400">
+      <p className="mt-1 text-sm text-slate-400">
         {title}
       </p>
+      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }

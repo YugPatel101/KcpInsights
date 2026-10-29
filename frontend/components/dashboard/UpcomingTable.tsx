@@ -1,169 +1,63 @@
+import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { DataStatusBadge, RiskBadge, ScoreValue, StatusBadge } from "@/components/kcp/ui";
+import { fmtCr, fmtDate, fmtPct, priceBand } from "@/lib/format";
+import type { IpoSummary } from "@/lib/types";
 
-const ipos = [
-  {
-    company: "Tata Capital",
-    sector: "Financial Services",
-    score: 8.8,
-    risk: "Low",
-    opens: "10 Jul",
-    status: "Upcoming",
-  },
-  {
-    company: "NSDL",
-    sector: "Depository Services",
-    score: 8.2,
-    risk: "Medium",
-    opens: "18 Jul",
-    status: "Upcoming",
-  },
-  {
-    company: "Hero FinCorp",
-    sector: "NBFC",
-    score: 7.6,
-    risk: "Medium",
-    opens: "25 Jul",
-    status: "Upcoming",
-  },
-];
-
-export default function UpcomingTable() {
+export default function UpcomingTable({ ipos, showListing = false }: { ipos: IpoSummary[]; showListing?: boolean }) {
   return (
-    <section className="mt-14">
-
-      <div className="mb-8 flex items-center justify-between">
-
-        <div>
-          <h2 className="text-3xl font-bold">
-            Upcoming IPOs
-          </h2>
-
-          <p className="mt-2 text-slate-400">
-            Highest rated IPOs based on our AI model.
-          </p>
-        </div>
-
-        <button className="rounded-xl border border-white/10 px-5 py-2 text-sm transition hover:border-slate-500 hover:bg-white/5">
-          View All
-        </button>
-
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
-
-        <table className="w-full">
-
-          <thead className="border-b border-white/10 bg-white/[0.03]">
-
-            <tr className="text-left text-sm uppercase tracking-wider text-slate-500">
-
-              <th className="px-8 py-5">Company</th>
-              <th>AI Score</th>
-              <th>Risk</th>
-              <th>Opens</th>
-              <th>Status</th>
-              <th></th>
-
-            </tr>
-
-          </thead>
-
-          <tbody>
-
-            {ipos.map((ipo) => (
-
-              <tr
-                key={ipo.company}
-                className="group border-b border-white/5 transition hover:bg-white/[0.04]"
-              >
-
-                <td className="px-8 py-6">
-
-                  <div className="flex items-center gap-4">
-
-                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800 text-lg font-bold text-white">
-                      {ipo.company.charAt(0)}
+    <div className="relative overflow-x-auto rounded-2xl border border-white/10 bg-white/[0.02]">
+      <table className="w-full min-w-[720px] text-sm">
+        <thead className="border-b border-white/10 bg-white/[0.03]">
+          <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+            <th scope="col" className="px-5 py-3">Company</th>
+            <th scope="col" className="px-3 py-3">Status</th>
+            <th scope="col" className="px-3 py-3">{showListing ? "Listed" : "Opens"}</th>
+            <th scope="col" className="px-3 py-3">Price band</th>
+            <th scope="col" className="px-3 py-3 text-right">Issue size</th>
+            <th scope="col" className="px-3 py-3 text-right">{showListing ? "Listing return" : "Research score"}</th>
+            <th scope="col" className="px-3 py-3">Risk</th>
+            <th scope="col" className="px-5 py-3"><span className="sr-only">Open</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {ipos.map((ipo) => (
+            <tr key={ipo.id} className="group border-b border-white/5 transition last:border-0 hover:bg-white/[0.04]">
+              <td className="px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-slate-800 font-bold text-white">{ipo.company_name.charAt(0)}</div>
+                  <div className="min-w-0">
+                    <Link href={`/ipos/${ipo.id}`} className="font-semibold text-white hover:underline">{ipo.company_name}</Link>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                      {ipo.sector} · {ipo.issue_type === "sme" ? "SME" : "Mainboard"}
+                      <DataStatusBadge status={ipo.data_status} compact />
                     </div>
-
-                    <div>
-
-                      <p className="font-semibold text-white">
-                        {ipo.company}
-                      </p>
-
-                      <p className="text-sm text-slate-400">
-                        {ipo.sector}
-                      </p>
-
-                    </div>
-
                   </div>
-
-                </td>
-
-                <td>
-
-                  <span className="font-bold text-white">
-                    {ipo.score}
+                </div>
+              </td>
+              <td className="px-3"><StatusBadge status={ipo.status} /></td>
+              <td className="px-3 text-slate-300">{fmtDate(showListing ? ipo.listing_date : ipo.open_date)}</td>
+              <td className="px-3 tabular-nums text-slate-300">{priceBand(ipo.price_band_low, ipo.price_band_high)}</td>
+              <td className="px-3 text-right tabular-nums text-slate-300">{fmtCr(ipo.issue_size_cr, 0)}</td>
+              <td className="px-3 text-right">
+                {showListing ? (
+                  <span className={`tabular-nums ${ipo.listing_return_pct !== null && ipo.listing_return_pct < 0 ? "text-rose-300" : "text-emerald-300"}`}>
+                    {fmtPct(ipo.listing_return_pct, 1, true)}
                   </span>
-
-                  <span className="text-slate-500">
-                    /10
-                  </span>
-
-                </td>
-
-                <td>
-
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      ipo.risk === "Low"
-                        ? "bg-emerald-500/10 text-emerald-400"
-                        : "bg-yellow-500/10 text-yellow-400"
-                    }`}
-                  >
-                    {ipo.risk}
-                  </span>
-
-                </td>
-
-                <td className="text-slate-300">
-                  {ipo.opens}
-                </td>
-
-                <td>
-
-                  <span className="rounded-full bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-400">
-                    {ipo.status}
-                  </span>
-
-                </td>
-
-                <td className="pr-8">
-
-                  <button className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2 text-sm transition hover:border-slate-500 hover:bg-white/5">
-
-                    Details
-
-                    <ArrowRight
-                      size={16}
-                      className="transition group-hover:translate-x-1"
-                    />
-
-                  </button>
-
-                </td>
-
-              </tr>
-
-            ))}
-
-          </tbody>
-
-        </table>
-
-      </div>
-
-    </section>
+                ) : (
+                  <ScoreValue value={ipo.scores?.composite} />
+                )}
+              </td>
+              <td className="px-3"><RiskBadge level={ipo.scores?.risk_level ?? null} /></td>
+              <td className="px-5 text-right">
+                <Link href={`/ipos/${ipo.id}`} className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1.5 text-xs transition hover:border-slate-500 hover:bg-white/5" aria-label={`Open ${ipo.company_name}`}>
+                  Details <ArrowRight size={14} className="transition group-hover:translate-x-0.5" aria-hidden />
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

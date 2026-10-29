@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-interface KcpButtonProps extends React.ComponentProps<typeof Button> {}
+type KcpButtonProps = React.ComponentProps<typeof Button>;
 
 export default function KcpButton({
   className,
