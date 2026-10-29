@@ -12,6 +12,7 @@ import {
   GitCompareArrows,
   FileText,
   Upload,
+  Database,
   X,
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ const menu = [
   { icon: FileText, title: "Reports", href: "/reports" },
   { icon: Star, title: "Watchlist", href: "/watchlist" },
   { icon: Upload, title: "Import data", href: "/import" },
+  { icon: Database, title: "Data pipeline", href: "/data" },
   { icon: Settings, title: "Settings", href: "/settings" },
 ];
 

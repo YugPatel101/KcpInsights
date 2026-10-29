@@ -12,7 +12,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agents.prompts import REPORT_SCHEMA, SYSTEM_REPORT
-from app.agents.validation import compact_json, numbers_in_data, unsupported_numbers
+from app.agents.validation import advice_problems, compact_json, numbers_in_data, unsupported_numbers
+from app.config import get_settings
 from app.models import IPOIssue, ResearchReport, utcnow
 from app.services.ipo_service import (
     build_scoring_inputs,
@@ -187,25 +188,39 @@ def build_report(db: Session, ipo: IPOIssue, *, use_llm: bool = True) -> dict[st
 
     generator = "deterministic"
     llm_status: dict[str, Any] = {"used": False}
-    if use_llm:
+    if use_llm and not get_settings().ai_report_narratives:
+        llm_status = {"used": False, "reason": "AI report narratives are off (KCP_AI_REPORT_NARRATIVES=false). With small local models "
+                                               "they misread score scales; every section above is written by the engine."}
+    elif use_llm:
         sel = select_provider()
         if sel.provider is None:
             llm_status = {"used": False, "reason": sel.reason}
         else:
+            def na(x: Any) -> Any:
+                return "unavailable" if x is None else x
+
+            # Self-describing names: a small local model otherwise guesses the direction of each scale (tested: it read a
+            # data-quality risk of 100 as "a solid foundation" and a risk component as the overall risk score).
             facts = {
-                "company": ipo.company.name, "synthetic": synthetic, "status": r["status"], "composite": r["composite"],
-                "quality": {n: c["score"] for n, c in q["components"].items()} | {"Q": q["score"]},
-                "valuation": {kk: v.get(kk) for kk in ("score", "multiple_label", "ipo_multiple", "peer_median", "premium_to_median_pct", "reason")},
-                "risk": {n: c["score"] for n, c in k["components"].items()} | {"R": k["score"], "level": k["level"]},
-                "coverage": e["coverage"], "missing": r["missing_components"], "latest_financials": latest,
+                "company": ipo.company.name, "synthetic": synthetic, "status": r["status"],
+                "composite_research_score (0-100, higher = stronger overall profile)": na(r["composite"]),
+                "quality_scores (0-100, higher = stronger financials)": {n: na(c["score"]) for n, c in q["components"].items()} | {"overall Q": na(q["score"])},
+                "valuation (score 0-100, higher = lower multiple than peers)": {
+                    "score V": na(v.get("score")), "multiple": na(v.get("multiple_label")), "ipo_multiple": na(v.get("ipo_multiple")),
+                    "peer_median_multiple": na(v.get("peer_median")), "premium_to_peer_median_pct (negative = below peers)": na(v.get("premium_to_median_pct")),
+                    "reason": v.get("reason")},
+                "risk_points (0-100, higher = MORE risk)": {f"{n} risk": na(c["score"]) for n, c in k["components"].items()}
+                | {"overall R": na(k["score"]), "overall level": na(k["level"])},
+                "evidence_coverage_pct": e["coverage"], "missing": r["missing_components"], "latest_financials": latest,
             }
             try:
                 out = sel.provider.chat_json(SYSTEM_REPORT, [{"role": "user", "content": "FACTS:\n" + compact_json(facts, 12000)}], REPORT_SCHEMA)
                 allowed = numbers_in_data(facts)
                 bad = {key: unsupported_numbers(str(out.get(key, "")), allowed) for key in REPORT_SCHEMA["required"]}
-                if any(bad.values()) or not all(isinstance(out.get(x), str) and out.get(x) for x in REPORT_SCHEMA["required"]):
-                    llm_status = {"used": False, "reason": "model narrative rejected: unsupported numbers or missing fields",
-                                  "unsupported_numbers": {kk: vv for kk, vv in bad.items() if vv}}
+                advice = [a for key in REPORT_SCHEMA["required"] for a in advice_problems(str(out.get(key, "")))]
+                if any(bad.values()) or advice or not all(isinstance(out.get(x), str) and out.get(x) for x in REPORT_SCHEMA["required"]):
+                    llm_status = {"used": False, "reason": "model narrative rejected: unsupported numbers, advice-like wording or missing fields",
+                                  "unsupported_numbers": {kk: vv for kk, vv in bad.items() if vv}, "advice": advice[:3]}
                 else:
                     by_key = {s["key"]: s for s in sections}
                     by_key["executive_summary"]["narrative"] = out["executive_summary"]

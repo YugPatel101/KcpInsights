@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Company,
+    DataMode,
     FinancialStatement,
     IPOIssue,
     PeerSnapshot,
@@ -36,7 +37,8 @@ def effective_status(ipo: IPOIssue, today: date | None = None) -> str:
     today = today or date.today()
     if ipo.status_override in ("withdrawn", "postponed"):
         return "withdrawn"
-    if ipo.listing_date and ipo.listing_date <= today:
+    # an *expected* listing date never makes an issue "listed" — only a confirmed one does
+    if ipo.listing_date and ipo.listing_date <= today and ipo.listing_date_status != "expected":
         return "listed"
     if ipo.open_date and today < ipo.open_date:
         return "upcoming"
@@ -52,7 +54,8 @@ def issue_price(ipo: IPOIssue) -> float | None:
 
 
 def listing_return_pct(ipo: IPOIssue) -> float | None:
-    p = issue_price(ipo)
+    """Listing-day return vs the *final* issue price. Never computed from a price band."""
+    p = ipo.final_issue_price
     if ipo.listing_price is None or not p:
         return None
     return round((ipo.listing_price - p) / p * 100, 2)
@@ -72,15 +75,35 @@ def source_brief(rec: SourceRecord | None) -> dict[str, Any] | None:
 
 
 def latest_subscription(ipo: IPOIssue) -> dict[str, Any] | None:
-    if not ipo.subscriptions:
+    subs = [s for s in ipo.subscriptions if s.basis == "consolidated"] or list(ipo.subscriptions)
+    if not subs:
         return None
-    last_ts = max(s.as_of for s in ipo.subscriptions)
-    cats = {s.category: s for s in ipo.subscriptions if s.as_of == last_ts}
+    last_ts = max(s.as_of for s in subs)
+    cats = {s.category: s for s in subs if s.as_of == last_ts}
     return {
         "as_of": last_ts.isoformat(),
+        "timezone": "IST" if ipo.nse_symbol else None,
+        "basis": next(iter(cats.values())).basis,
         "categories": {k: v.times_subscribed for k, v in cats.items()},
         "data_status": sorted({v.data_status for v in cats.values()}),
     }
+
+
+def key_dates(ipo: IPOIssue) -> list[dict[str, Any]]:
+    """Issue timeline with an explicit status per date (actual vs expected/estimated)."""
+    live = bool(ipo.nse_symbol)
+    rows = [
+        ("open", "Bidding opens", ipo.open_date, "verified" if live else ipo.data_status),
+        ("close", "Bidding closes", ipo.close_date, "verified" if live else ipo.data_status),
+        ("allotment", "Allotment (expected)", ipo.allotment_date, "estimated"),
+        ("refund", "Refunds (expected)", ipo.refund_date, "estimated"),
+        ("demat_credit", "Demat credit (expected)", ipo.demat_credit_date, "estimated"),
+    ]
+    if ipo.listing_date_status == "expected":
+        rows.append(("listing", "Listing (expected)", ipo.listing_date, "estimated"))
+    else:
+        rows.append(("listing", "Listing", ipo.listing_date, "verified" if live and ipo.listing_date_status == "actual" else ipo.data_status))
+    return [{"key": k, "label": lbl, "date": d.isoformat() if d else None, "status": st if d else "unavailable"} for k, lbl, d, st in rows]
 
 
 def serialize_ipo_summary(ipo: IPOIssue, today: date | None = None) -> dict[str, Any]:
@@ -108,14 +131,25 @@ def serialize_ipo_summary(ipo: IPOIssue, today: date | None = None) -> dict[str,
         "fresh_issue_cr": ipo.fresh_issue_cr,
         "ofs_cr": ipo.ofs_cr,
         "listing_price": ipo.listing_price,
+        "listing_close_price": ipo.listing_close_price,
+        "listing_price_basis": ipo.listing_price_basis,
         "listing_return_pct": lr,
         "listing_data_status": ipo.listing_data_status if ipo.listing_price is not None else None,
+        "listing_date_status": ipo.listing_date_status if ipo.listing_date else None,
+        "nse_symbol": ipo.nse_symbol,
+        "freshness": _freshness(ipo, today),
         "subscription": latest_subscription(ipo),
         "data_mode": ipo.data_mode,
         "data_status": ipo.data_status,
         "last_updated": ipo.updated_at.isoformat() if ipo.updated_at else None,
         "source": source_brief(ipo.source_record),
     }
+
+
+def _freshness(ipo: IPOIssue, today: date | None) -> dict[str, Any]:
+    from app.ingestion.data_quality_service import ipo_freshness
+
+    return ipo_freshness(ipo, effective_status(ipo, today))
 
 
 def serialize_ipo_detail(ipo: IPOIssue, today: date | None = None) -> dict[str, Any]:
@@ -142,9 +176,16 @@ def serialize_ipo_detail(ipo: IPOIssue, today: date | None = None) -> dict[str, 
             "risk_disclosures_reviewed": ipo.risk_disclosures_reviewed,
             "research_notes": ipo.research_notes,
             "created_by": ipo.created_by,
+            "registrar": ipo.registrar,
+            "lead_managers": ipo.lead_managers,
+            "offer_document_url": ipo.offer_document_url,
+            "basis_of_price_url": ipo.basis_of_price_url,
+            "issue_size_text": ipo.issue_size_text,
+            "shares_offered": ipo.shares_offered,
+            "key_dates": key_dates(ipo),
             "subscription_history": [
-                {"as_of": s.as_of.isoformat(), "category": s.category, "times_subscribed": s.times_subscribed,
-                 "data_status": s.data_status, "source_record_id": s.source_record_id}
+                {"as_of": s.as_of.isoformat(), "category": s.category, "times_subscribed": s.times_subscribed, "basis": s.basis,
+                 "shares_offered": s.shares_offered, "shares_bid": s.shares_bid, "data_status": s.data_status, "source_record_id": s.source_record_id}
                 for s in sorted(ipo.subscriptions, key=lambda s: (s.as_of, s.category))
             ],
             "grey_market": {
@@ -193,6 +234,12 @@ IPO_LOAD_OPTIONS = (
 
 def get_ipo(db: Session, ipo_id: int) -> IPOIssue | None:
     return db.execute(select(IPOIssue).where(IPOIssue.id == ipo_id).options(*IPO_LOAD_OPTIONS)).scalar_one_or_none()
+
+
+def include_demo_default(db: Session) -> bool:
+    """Synthetic demo IPOs are shown only while no real (imported or live) IPO exists."""
+    real = db.execute(select(IPOIssue.id).where(IPOIssue.data_mode != DataMode.demo.value).limit(1)).first()
+    return real is None
 
 
 def all_ipos(db: Session) -> list[IPOIssue]:

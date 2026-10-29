@@ -26,6 +26,7 @@ from app.services.ipo_service import (
     current_statements,
     get_active_config,
     get_ipo,
+    include_demo_default,
     score_ipo,
     score_summary,
     serialize_ipo_detail,
@@ -53,6 +54,7 @@ def list_ipos(
     issue_type: Literal["mainboard", "sme"] | None = None,
     sector: str | None = Query(None, max_length=200),
     data_mode: Literal["demo", "imported", "source"] | None = None,
+    include_demo: bool | None = Query(None, description="default: demo IPOs only while no real data exists"),
     min_issue_size: float | None = Query(None, ge=0),
     max_issue_size: float | None = Query(None, ge=0),
     min_quality: float | None = Query(None, ge=0, le=100),
@@ -64,8 +66,11 @@ def list_ipos(
     page_size: int = Query(20, ge=1, le=100),
 ) -> dict[str, Any]:
     statuses, sectors, exchanges = _csv(status), _csv(sector), _csv(exchange)
+    show_demo = include_demo if include_demo is not None else (include_demo_default(db) or data_mode == "demo")
     rows = []
     for ipo in all_ipos(db):
+        if not show_demo and ipo.data_mode == "demo":
+            continue
         s = serialize_ipo_summary(ipo)
         if q and q.lower() not in f"{s['company_name']} {s['symbol'] or ''} {s['sector']} {s['industry'] or ''}".lower():
             continue
@@ -115,7 +120,7 @@ def list_ipos(
     rows.sort(key=sort_key)
     total = len(rows)
     start = (page - 1) * page_size
-    return {"items": rows[start : start + page_size], "total": total, "page": page, "page_size": page_size}
+    return {"items": rows[start : start + page_size], "total": total, "page": page, "page_size": page_size, "demo_included": show_demo}
 
 
 def _neg(v: Any) -> Any:

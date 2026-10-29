@@ -40,7 +40,12 @@ def agent_chat(body: ChatIn, request: Request, db: Session = Depends(get_db), ct
     if body.ipo_id is not None and get_ipo(db, body.ipo_id) is None:
         raise not_found("IPO")
 
-    agent = IPOResearchAgent(db, ctx.user if ctx else None)
+    from app.config import get_settings
+    from app.ingestion.ingestion_scheduler import get_runner
+
+    # stale live records may be refreshed once (one upstream request) before answering
+    refresher = get_runner().refresh_single if get_settings().ingest_enabled else None
+    agent = IPOResearchAgent(db, ctx.user if ctx else None, refresher=refresher)
     result = agent.run(body.message, context_ipo_id=body.ipo_id or (convo.ipo_id if convo else None))
 
     if ctx is not None:

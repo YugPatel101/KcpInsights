@@ -1,6 +1,6 @@
 // Types mirroring the FastAPI responses. Keep in sync with backend/app/api/routes.
 
-export type DataStatus = "verified" | "imported" | "estimated" | "synthetic" | "unavailable";
+export type DataStatus = "verified" | "imported" | "estimated" | "synthetic" | "secondary_source" | "unavailable";
 export type IpoStatus = "upcoming" | "open" | "closed" | "listed" | "withdrawn";
 export type RiskLevel = "low" | "moderate" | "high" | null;
 
@@ -29,8 +29,26 @@ export interface ScoreSummary {
 
 export interface Subscription {
   as_of: string;
+  timezone?: string | null;
+  basis?: string;
   categories: Record<string, number>;
   data_status: DataStatus[];
+}
+
+export interface Freshness {
+  live: boolean;
+  last_verified_at: string | null;
+  is_stale: boolean;
+  stale_reasons: string[];
+  missing_critical: string[];
+  note?: string;
+}
+
+export interface KeyDate {
+  key: string;
+  label: string;
+  date: string | null;
+  status: DataStatus;
 }
 
 export interface IpoSummary {
@@ -55,8 +73,13 @@ export interface IpoSummary {
   fresh_issue_cr: number | null;
   ofs_cr: number | null;
   listing_price: number | null;
+  listing_close_price?: number | null;
+  listing_price_basis?: string | null;
   listing_return_pct: number | null;
   listing_data_status: DataStatus | null;
+  listing_date_status?: "actual" | "expected" | null;
+  nse_symbol?: string | null;
+  freshness: Freshness;
   subscription: Subscription | null;
   data_mode: "demo" | "imported" | "source";
   data_status: DataStatus;
@@ -122,7 +145,14 @@ export interface IpoDetail extends IpoSummary {
   use_of_proceeds: { purpose: string; amount_cr: number }[] | null;
   risk_disclosures_reviewed: boolean;
   research_notes: string | null;
-  subscription_history: { as_of: string; category: string; times_subscribed: number; data_status: DataStatus }[];
+  registrar: string | null;
+  lead_managers: string | null;
+  offer_document_url: string | null;
+  basis_of_price_url: string | null;
+  issue_size_text: string | null;
+  shares_offered: number | null;
+  key_dates: KeyDate[];
+  subscription_history: { as_of: string; category: string; times_subscribed: number; basis?: string; data_status: DataStatus }[];
   grey_market: { caveat: string; observations: { observed_at: string; premium_inr: number; data_status: DataStatus }[] };
   peers: Peer[];
   disclosures: Disclosure[];
@@ -354,9 +384,11 @@ export interface ToolCall {
   duration_ms: number;
 }
 
+export type PointKind = "fact" | "calculation" | "interpretation" | "hypothetical";
+
 export interface AgentAnswer {
   summary: string;
-  points: { text: string; evidence: string[] }[];
+  points: { text: string; evidence: string[]; kind?: PointKind }[];
   limitations: string[];
   follow_up_questions?: string[];
 }
@@ -476,6 +508,8 @@ export interface DashboardSummary {
   as_of: string;
   totals: { ipos: number; by_status: Partial<Record<IpoStatus, number>>; documents: number; issue_size_open_upcoming_cr: number };
   data_modes: Record<string, number>;
+  demo_included: boolean;
+  demo_available: boolean;
   synthetic_share: number;
   upcoming: IpoSummary[];
   recently_listed: IpoSummary[];
@@ -494,4 +528,105 @@ export interface Prediction {
   probability_positive?: number;
   expected_return_pct?: number;
   model_version?: string;
+}
+
+export interface SourceHealth {
+  key: string;
+  name: string;
+  base_url: string;
+  authority: string;
+  access_mode: "automatic" | "manual_only";
+  health_status: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  requests_made: number;
+  is_stale: boolean;
+  notes: string | null;
+}
+
+export interface FieldChangeRow {
+  ipo_id: number;
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+  source_key: string;
+  changed_at: string;
+}
+
+export interface SchedulerStatus {
+  running: boolean;
+  enabled: boolean;
+  note?: string;
+  jobs?: { id: string; next_run_at: string | null; interval_minutes: number }[];
+}
+
+export interface FreshnessReport {
+  last_successful_sync_at: string | null;
+  last_successful_job: string | null;
+  sources: SourceHealth[];
+  stale_records: { id: number; company_name: string; status: IpoStatus; reasons: string[] }[];
+  missing_critical_fields: { id: number; company_name: string; status: IpoStatus; missing: string[] }[];
+  recent_changes: FieldChangeRow[];
+  scheduler: SchedulerStatus;
+}
+
+export interface SyncJob {
+  id: number;
+  job_type: string;
+  trigger: string;
+  status: "running" | "success" | "partial" | "failed" | "skipped";
+  started_at: string;
+  finished_at: string | null;
+  records_discovered: number;
+  records_created: number;
+  records_updated: number;
+  fields_changed: number;
+  requests_made: number;
+  errors: Record<string, unknown>[];
+  detail: Record<string, unknown>;
+  warning_count: number;
+}
+
+export interface SyncStatus {
+  scheduler: SchedulerStatus;
+  intervals_minutes: Record<string, number>;
+  jobs: SyncJob[];
+  sources: SourceHealth[];
+}
+
+export interface MarketOverview {
+  as_of: string;
+  counts: Partial<Record<IpoStatus, number>>;
+  open: IpoSummary[];
+  opening_soon: IpoSummary[];
+  listing_soon: IpoSummary[];
+  recently_listed: IpoSummary[];
+  listing_stats_30d: { count_with_verified_return: number; positive: number; negative: number; median_return_pct: number | null; note: string };
+  data: { last_successful_sync_at: string | null; stale_records: number; live_records: number; demo_records_included: boolean };
+}
+
+export interface SubscriptionDetail {
+  ipo_id: number;
+  company_name: string;
+  status: IpoStatus;
+  latest_as_of: string | null;
+  timezone: string | null;
+  basis_note: string;
+  latest: { category: string; times_subscribed: number; shares_offered: number | null; shares_bid: number | null; data_status: DataStatus }[];
+  history: { as_of: string; category: string; times_subscribed: number; basis: string }[];
+  freshness: Freshness;
+  source_url: string | null;
+}
+
+export interface FieldProvenance {
+  value: unknown;
+  source_key: string;
+  source_url: string | null;
+  first_seen_at: string;
+  last_verified_at: string;
+  data_status: DataStatus;
+  basis: string | null;
+  conflicts: number;
 }

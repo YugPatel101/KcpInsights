@@ -57,19 +57,29 @@ const DS_STYLE: Record<DataStatus, string> = {
   imported: "border-sky-500/30 text-sky-300",
   estimated: "border-amber-500/30 text-amber-300",
   synthetic: "border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300",
+  secondary_source: "border-slate-400/30 text-slate-300",
   unavailable: "border-white/10 text-slate-500",
+};
+
+const DS_TITLE: Record<DataStatus, string> = {
+  verified: "From an official source (exchange/regulator), parsed and validated",
+  imported: "User-imported research with stated provenance",
+  estimated: "Derived or estimated — e.g. expected dates from the SEBI T+3 timeline",
+  synthetic: "Fictional demonstration data — not a real financial fact",
+  secondary_source: "Non-authoritative public source, used for discovery or cross-checks",
+  unavailable: "Not available from any connected source",
 };
 
 export function DataStatusBadge({ status, compact = false }: { status: DataStatus | null | undefined; compact?: boolean }) {
   const s = status ?? "unavailable";
   return (
     <span
-      title={s === "synthetic" ? "Fictional demonstration data — not a real financial fact" : `Data status: ${s}`}
+      title={DS_TITLE[s]}
       className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide", DS_STYLE[s])}
     >
       {s === "synthetic" && <FlaskConical className="size-3" aria-hidden />}
       {s === "verified" && <ShieldCheck className="size-3" aria-hidden />}
-      {compact && s === "synthetic" ? "demo" : s}
+      {compact && s === "synthetic" ? "demo" : s === "secondary_source" ? "secondary" : s}
     </span>
   );
 }

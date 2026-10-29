@@ -96,6 +96,7 @@ for i in $(seq 1 40); do
   [[ $i == 40 ]] && fail "Backend did not become healthy on port $API_PORT."
 done
 green "API healthy  → http://127.0.0.1:$API_PORT/api/docs"
+info "Live NSE sync runs in the API process (first run ~15 s after start; see http://localhost:$WEB_PORT/data)"
 
 if curl -fsS -m 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
   green "Ollama detected — the research agent will use it if the configured model is downloaded."

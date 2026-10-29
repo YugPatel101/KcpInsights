@@ -22,12 +22,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.models import DocumentChunk, SourceDocument, SourceRecord
-from app.services.llm_provider import ProviderError, embedding_provider
+from app.services.llm_provider import ProviderError, embedding_provider, embedding_signature
 
 CHUNK_CHARS = 900
 CHUNK_OVERLAP = 150
 MAX_PAGE_CHARS = 30_000
-COSINE_THRESHOLD = 0.45
+COSINE_THRESHOLD = 0.52  # calibrated for nomic-embed-text with task prefixes: unrelated queries scored <= 0.49
 BM25_THRESHOLD = 1.2
 
 INJECTION_PATTERNS = [
@@ -129,7 +129,7 @@ def _store_document(db: Session, *, ipo_id: int | None, title: str, doc_type: st
                     vecs = prov.embed([ch.text for ch in batch])
                     for ch, v in zip(batch, vecs, strict=True):
                         ch.embedding = v
-                doc.embedding_model = get_settings().ollama_embed_model
+                doc.embedding_model = embedding_signature()
             except ProviderError:
                 for ch in chunks:
                     ch.embedding = None
@@ -160,6 +160,26 @@ def ingest_pdf_document(db: Session, *, ipo_id: int | None, title: str, doc_type
         path.write_bytes(data)
     return _store_document(db, ipo_id=ipo_id, title=title, doc_type=doc_type, pages=pages, sha=sha, mime="application/pdf",
                            source_url=source_url, user_id=user_id, data_status=data_status, storage_key=key, embed=embed)
+
+
+def embed_missing(db: Session) -> tuple[int, int]:
+    """Embed documents stored before an embedding model was available (or with a different model). Returns (documents, chunks)."""
+    prov = embedding_provider()
+    if prov is None:
+        raise ProviderError(f"embedding model '{get_settings().ollama_embed_model}' is not available in Ollama")
+    model = embedding_signature()
+    docs = list(db.execute(select(SourceDocument).where((SourceDocument.embedding_model.is_(None)) | (SourceDocument.embedding_model != model))).scalars())
+    n_chunks = 0
+    for doc in docs:
+        chunks = list(doc.chunks)
+        for i in range(0, len(chunks), 32):
+            batch = chunks[i : i + 32]
+            for ch, v in zip(batch, prov.embed([ch.text for ch in batch]), strict=True):
+                ch.embedding = v
+        doc.embedding_model = model if chunks else None
+        n_chunks += len(chunks)
+        db.commit()
+    return len(docs), n_chunks
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -199,11 +219,14 @@ def search(db: Session, query: str, *, ipo_id: int | None = None, k: int = 5) ->
         return {"mode": "none", "results": [], "no_evidence": True, "reason": "no documents ingested for this scope"}
     mode = "keyword"
     scored: list[tuple[float, DocumentChunk]] = []
-    with_emb = [c for c in chunks if c.embedding]
-    prov = embedding_provider() if with_emb else None
+    model = embedding_signature()
+    with_emb = [c for c in chunks if c.embedding and c.document.embedding_model == model]
+    # Cosine scores exist only for embedded chunks, so a partly embedded corpus is searched by keyword to keep every
+    # document visible (backfill with `python -m app.cli embed`).
+    prov = embedding_provider() if with_emb and len(with_emb) == len(chunks) else None
     if prov is not None:
         try:
-            qv = prov.embed([query])[0]
+            qv = prov.embed([query], kind="query")[0]
             scored = [(_cosine(qv, c.embedding or []), c) for c in with_emb]
             scored = [(s, c) for s, c in scored if s >= COSINE_THRESHOLD]
             mode = "embedding"

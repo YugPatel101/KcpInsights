@@ -11,7 +11,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import UTC, date, datetime, timedelta, timezone
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
@@ -36,6 +37,8 @@ from app.services.ipo_service import (
 )
 from app.services.scenario import run_scenarios
 
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
 
 class ToolError(Exception):
     pass
@@ -46,6 +49,8 @@ class ToolContext:
     db: Session
     user: User | None
     conversation_id: int | None = None
+    # bounded single-IPO refresh from the live source (None in tests / when ingestion is disabled)
+    refresher: Callable[[int], dict[str, Any]] | None = None
 
 
 @dataclass
@@ -99,6 +104,29 @@ class ReportArgs(IpoArg):
     save: bool = True
 
 
+class SearchIposArgs(_Args):
+    query: str | None = Field(default=None, max_length=100, description="company/sector text")
+    status: list[Literal["upcoming", "open", "closed", "listed", "withdrawn"]] = Field(default_factory=list)
+    opening_from: date | None = None
+    opening_to: date | None = None
+    issue_type: Literal["mainboard", "sme"] | None = None
+    limit: int = Field(default=15, ge=1, le=50)
+
+
+class StatusArgs(IpoArg):
+    allow_refresh: bool = True
+
+
+class ScheduleArgs(_Args):
+    date_from: date
+    date_to: date
+    include_estimated: bool = True
+
+
+class CompareArgs(_Args):
+    ipo_ids: list[int] = Field(min_length=2, max_length=4)
+
+
 @dataclass
 class Tool:
     name: str
@@ -131,18 +159,21 @@ def _calc_ev(ipo: IPOIssue, label: str, detail: dict[str, Any]) -> Evidence:
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
-def get_ipo_profile(ctx: ToolContext, a: IpoArg) -> ToolResult:
+def get_ipo_details(ctx: ToolContext, a: IpoArg) -> ToolResult:
     ipo = _ipo(ctx, a.ipo_id)
     d = serialize_ipo_detail(ipo)
     keep = ("id", "company_name", "sector", "industry", "exchange", "issue_type", "status", "open_date", "close_date", "listing_date",
             "price_band_low", "price_band_high", "final_issue_price", "lot_size", "min_investment_inr", "issue_size_cr", "fresh_issue_cr",
             "ofs_cr", "post_issue_shares", "dilution_pct", "promoter_holding_pre_pct", "promoter_holding_post_pct", "use_of_proceeds",
-            "business_model", "description", "revenue_sources", "subscription", "listing_price", "listing_return_pct", "data_mode", "data_status")
+            "business_model", "description", "revenue_sources", "subscription", "listing_price", "listing_return_pct", "data_mode", "data_status",
+            "listing_date_status")
     data = {k: d.get(k) for k in keep}
+    data["sector"] = _sector(data["sector"])
+    data["estimated_fields"] = _estimated_fields(ctx, ipo)
     return ToolResult(data, [_issue_ev(ipo)], f"Profile of {ipo.company.name} ({data['status']}, {data['data_status']})")
 
 
-def get_financial_statements(ctx: ToolContext, a: IpoArg) -> ToolResult:
+def get_verified_financials(ctx: ToolContext, a: IpoArg) -> ToolResult:
     ipo = _ipo(ctx, a.ipo_id)
     stmts = current_statements(ctx.db, ipo.company_id)
     rows = serialize_statements(stmts)
@@ -192,7 +223,7 @@ def calculate_valuation_score(ctx: ToolContext, a: IpoArg) -> ToolResult:
     return ToolResult(keep, ev, f"Valuation {v['score']} ({v['status']})")
 
 
-def calculate_risk_score(ctx: ToolContext, a: IpoArg) -> ToolResult:
+def get_risk_breakdown(ctx: ToolContext, a: IpoArg) -> ToolResult:
     ipo, r = _scores(ctx, a.ipo_id)
     k = r["risk"]
     comps = {n: {"score": c["score"], "status": c["status"], "weight": c["weight"],
@@ -251,7 +282,7 @@ def get_official_disclosures(ctx: ToolContext, a: IpoArg) -> ToolResult:
     return ToolResult(data, ev, f"{len(ipo.disclosures)} disclosure(s), {len(docs)} document(s)")
 
 
-def search_local_research_documents(ctx: ToolContext, a: SearchArgs) -> ToolResult:
+def search_offer_documents(ctx: ToolContext, a: SearchArgs) -> ToolResult:
     res = rag.search(ctx.db, a.query, ipo_id=a.ipo_id, k=a.k)
     ev = [Evidence("document_chunk", f"{r['document_title']} p.{r['page']}", r["chunk_id"], r["source_url"], r["data_status"], r["page"],
                    {"injection_suspected": r["injection_suspected"]}) for r in res["results"]]
@@ -287,7 +318,7 @@ def run_scenario_analysis(ctx: ToolContext, a: ScenarioArgs) -> ToolResult:
     return ToolResult(res, [_calc_ev(ipo, "scenario analysis", {"status": res["status"]})], f"Scenarios: {res['status']}")
 
 
-def get_data_provenance(ctx: ToolContext, a: IpoArg) -> ToolResult:
+def get_source_provenance(ctx: ToolContext, a: IpoArg) -> ToolResult:
     from app.api.routes.ipos import collect_sources
 
     ipo, r = _scores(ctx, a.ipo_id)
@@ -316,21 +347,201 @@ def generate_research_report(ctx: ToolContext, a: ReportArgs) -> ToolResult:
                       f"Report generated{' and saved' if report_id else ''}")
 
 
+def _estimated_fields(ctx: ToolContext, ipo: IPOIssue) -> dict[str, dict[str, Any]]:
+    """Stored values that are derived estimates (e.g. upper-band issue size, T+3 dates), so answers can label them."""
+    from app.ingestion.ipo_data_service import field_provenance
+
+    return {f: {"value": p["value"], "basis": p.get("basis")} for f, p in field_provenance(ctx.db, ipo.id).items()
+            if p.get("data_status") == "estimated" and p.get("value") is not None}
+
+
+def _ist(dt: datetime | None) -> str | None:
+    """Stored timestamps are naive UTC; tools give them in IST with an explicit offset so they are not misread."""
+    return (dt.replace(tzinfo=UTC).astimezone(IST)).isoformat(timespec="minutes") if dt else None
+
+
+def _fresh(fresh: dict[str, Any], ipo: IPOIssue) -> dict[str, Any]:
+    return {**fresh, "last_verified_at": _ist(ipo.last_verified_at)}
+
+
+def _sector(name: str | None) -> str | None:
+    return None if not name or name == "Unclassified" else name
+
+
+def _live_evidence(ipo: IPOIssue) -> list[Evidence]:
+    rec = ipo.source_record
+    ev = [Evidence("source_record", f"{ipo.company.name}: issue record ({rec.title if rec else 'stored data'})", rec.id if rec else None,
+                   rec.source_url if rec else None, ipo.data_status,
+                   detail={"retrieved_at": _ist(rec.retrieved_at) if rec else None, "last_verified_at": _ist(ipo.last_verified_at)})]
+    return ev
+
+
+def search_ipos(ctx: ToolContext, a: SearchIposArgs) -> ToolResult:
+    from app.services.ipo_service import effective_status, include_demo_default
+
+    show_demo = include_demo_default(ctx.db)
+    rows, ev = [], []
+    for ipo in all_ipos(ctx.db):
+        if not show_demo and ipo.data_mode == "demo":
+            continue
+        st = effective_status(ipo)
+        if a.status and st not in a.status:
+            continue
+        if a.issue_type and ipo.issue_type != a.issue_type:
+            continue
+        if a.query and a.query.lower() not in f"{ipo.company.name} {ipo.company.sector} {ipo.nse_symbol or ''}".lower():
+            continue
+        if a.opening_from and (ipo.open_date is None or ipo.open_date < a.opening_from):
+            continue
+        if a.opening_to and (ipo.open_date is None or ipo.open_date > a.opening_to):
+            continue
+        rows.append(ipo)
+    rows.sort(key=lambda i: (i.open_date or date.max))
+    items = []
+    for ipo in rows[: a.limit]:
+        s = serialize_ipo_summary(ipo)
+        item = {k: s[k] for k in ("id", "company_name", "nse_symbol", "sector", "issue_type", "exchange", "status", "open_date", "close_date",
+                                  "listing_date", "listing_date_status", "price_band_low", "price_band_high", "lot_size", "issue_size_cr",
+                                  "data_mode", "data_status")}
+        item["sector"] = _sector(item["sector"])
+        item["estimated_fields"] = _estimated_fields(ctx, ipo)
+        items.append(item)
+        ev += _live_evidence(ipo)
+    return ToolResult({"items": items, "total_matches": len(rows), "filters": a.model_dump(mode="json"),
+                       "demo_included": show_demo}, ev, f"{len(rows)} IPO(s) match")
+
+
+def get_latest_ipo_status(ctx: ToolContext, a: StatusArgs) -> ToolResult:
+    from app.ingestion.data_quality_service import ipo_freshness
+    from app.ingestion.ipo_data_service import recent_changes
+    from app.services.ipo_service import effective_status, key_dates, latest_subscription
+
+    ipo = _ipo(ctx, a.ipo_id)
+    status = effective_status(ipo)
+    fresh = ipo_freshness(ipo, status)
+    refresh = None
+    if fresh["is_stale"] and a.allow_refresh and ctx.refresher is not None:
+        refresh = ctx.refresher(ipo.id)  # one bounded request; falls back to stored data on failure
+        ctx.db.expire_all()
+        ipo = _ipo(ctx, a.ipo_id)
+        status = effective_status(ipo)
+        fresh = ipo_freshness(ipo, status)
+    dates = key_dates(ipo)
+    issues = []
+    d = {k["key"]: k["date"] for k in dates}
+    if d.get("open") and d.get("close") and d["open"] > d["close"]:
+        issues.append("open date after close date")
+    if d.get("close") and d.get("listing") and d["listing"] < d["close"]:
+        issues.append("listing date before close date")
+    data = {
+        "company_name": ipo.company.name, "nse_symbol": ipo.nse_symbol, "status": status, "data_mode": ipo.data_mode, "data_status": ipo.data_status,
+        "key_dates": dates, "price_band": [ipo.price_band_low, ipo.price_band_high], "final_issue_price": ipo.final_issue_price,
+        "lot_size": ipo.lot_size, "issue_size_cr": ipo.issue_size_cr, "listing_price": ipo.listing_price, "listing_price_basis": ipo.listing_price_basis,
+        "listing_return_pct": listing_return_pct(ipo), "subscription": latest_subscription(ipo), "freshness": _fresh(fresh, ipo),
+        "recent_changes": recent_changes(ctx.db, ipo.id, limit=10), "refresh": refresh, "consistency_issues": issues,
+        "estimated_fields": _estimated_fields(ctx, ipo),
+        "source_url": ipo.source_record.source_url if ipo.source_record else None,
+    }
+    return ToolResult(data, _live_evidence(ipo), f"{ipo.company.name}: {status}{' (stale)' if fresh['is_stale'] else ''}")
+
+
+def get_listing_schedule(ctx: ToolContext, a: ScheduleArgs) -> ToolResult:
+    from app.services.ipo_service import effective_status, include_demo_default
+
+    if a.date_to < a.date_from:
+        raise ToolError("date_to is before date_from")
+    show_demo = include_demo_default(ctx.db)
+    events, ev = [], []
+    for ipo in all_ipos(ctx.db):
+        if not show_demo and ipo.data_mode == "demo":
+            continue
+        hit = False
+        for kind, d, est in (("opens", ipo.open_date, False), ("closes", ipo.close_date, False),
+                             ("lists", ipo.listing_date, ipo.listing_date_status == "expected"),
+                             ("allotment", ipo.allotment_date, True)):
+            if d and a.date_from <= d <= a.date_to and (a.include_estimated or not est):
+                events.append({"date": d.isoformat(), "event": kind, "ipo_id": ipo.id, "company_name": ipo.company.name,
+                               "status": effective_status(ipo), "date_status": "estimated" if est else ("verified" if ipo.nse_symbol else ipo.data_status)})
+                hit = True
+        if hit:
+            ev += _live_evidence(ipo)
+    events.sort(key=lambda e: (e["date"], e["event"]))
+    return ToolResult({"from": a.date_from.isoformat(), "to": a.date_to.isoformat(), "events": events,
+                       "note": "Estimated dates follow SEBI's T+3 timeline from the issue close and ignore exchange holidays."},
+                      ev, f"{len(events)} event(s) between {a.date_from} and {a.date_to}")
+
+
+def get_subscription_data(ctx: ToolContext, a: IpoArg) -> ToolResult:
+    from app.ingestion.data_quality_service import ipo_freshness
+    from app.services.ipo_service import effective_status
+
+    ipo = _ipo(ctx, a.ipo_id)
+    snaps = sorted(ipo.subscriptions, key=lambda s: s.as_of)
+    cons = [s for s in snaps if s.basis == "consolidated"] or snaps
+    latest = max((s.as_of for s in cons), default=None)
+    data = {"company_name": ipo.company.name, "status": effective_status(ipo), "latest_as_of": latest.isoformat() if latest else None,
+            "timezone": "IST" if ipo.nse_symbol else None, "basis": cons[0].basis if cons else None,
+            "latest": {s.category: round(s.times_subscribed, 4) for s in cons if s.as_of == latest},
+            "history_points": len({s.as_of for s in cons}), "freshness": _fresh(ipo_freshness(ipo, effective_status(ipo)), ipo),
+            "note": "Subscription multiples are published by the exchange; no figure is estimated." if cons else "No subscription data has been published or stored."}
+    return ToolResult(data, _live_evidence(ipo), f"subscription as of {data['latest_as_of'] or 'n/a'}")
+
+
+def compare_ipos(ctx: ToolContext, a: CompareArgs) -> ToolResult:
+    from app.services.ipo_service import effective_status
+
+    items, ev = [], []
+    for i in dict.fromkeys(a.ipo_ids):
+        ipo, r = _scores(ctx, i)
+        items.append({"ipo_id": i, "company_name": ipo.company.name, "status": effective_status(ipo), "scores": score_summary(r),
+                      "price_band": [ipo.price_band_low, ipo.price_band_high], "issue_size_cr": ipo.issue_size_cr,
+                      "subscription_total": next((s.times_subscribed for s in sorted(ipo.subscriptions, key=lambda s: s.as_of, reverse=True)
+                                                  if s.category == "total" and s.basis == "consolidated"), None),
+                      "listing_return_pct": listing_return_pct(ipo), "data_status": ipo.data_status,
+                      "estimated_fields": _estimated_fields(ctx, ipo)})
+        ev.append(_calc_ev(ipo, "research scores", score_summary(r)))
+        ev += _live_evidence(ipo)
+    return ToolResult({"items": items}, ev, f"compared {len(items)} IPOs")
+
+
+def get_quantitative_score(ctx: ToolContext, a: IpoArg) -> ToolResult:
+    ipo, r = _scores(ctx, a.ipo_id)
+    data = {
+        "status": r["status"], "composite": r["composite"], "formula": r["composite_formula"], "weights": r["composite_weights"],
+        "quality": {"score": r["quality"]["score"], "components": {n: c["score"] for n, c in r["quality"]["components"].items()}},
+        "valuation": {k: r["valuation"].get(k) for k in ("score", "multiple_label", "ipo_multiple", "peer_median", "reason")},
+        "risk": {"score": r["risk"]["score"], "level": r["risk"]["level"], "components": {n: c["score"] for n, c in r["risk"]["components"].items()}},
+        "coverage": r["coverage"], "missing_components": r["missing_components"], "unavailable_metrics": r["unavailable_metrics"][:15],
+        "config_version": r["config_version"], "calculated_at": r["calculated_at"], "input_fingerprint": r["input_fingerprint"][:16],
+        "source_record_ids": r["provenance_source_record_ids"], "is_probability": False,
+    }
+    return ToolResult(data, [_calc_ev(ipo, "research score", {"config": r["config_version"], "calculated_at": r["calculated_at"]})],
+                      f"score {r['composite']} ({r['status']})")
+
+
 TOOLS: dict[str, Tool] = {
     t.name: t
     for t in [
-        Tool("get_ipo_profile", "Issue structure, dates, price band, business description and status for one IPO.", IpoArg, get_ipo_profile),
-        Tool("get_financial_statements", "Stored financial statements (INR crore) with provenance.", IpoArg, get_financial_statements),
+        Tool("search_ipos", "Find IPOs by status, opening-date range, issue type or name (e.g. 'opening next week').", SearchIposArgs, search_ipos),
+        Tool("get_ipo_details", "Issue structure, dates, price band, business description and status for one IPO.", IpoArg, get_ipo_details),
+        Tool("get_latest_ipo_status", "Current status, key dates (actual vs expected), latest subscription, freshness and recent changes; "
+             "may refresh once if stale.", StatusArgs, get_latest_ipo_status),
+        Tool("get_listing_schedule", "Openings, closings, allotments and listings within a date range.", ScheduleArgs, get_listing_schedule),
+        Tool("get_subscription_data", "Latest exchange-published subscription by investor category with its timestamp.", IpoArg, get_subscription_data),
+        Tool("compare_ipos", "Side-by-side scores, issue details, subscription and listing outcomes for 2–4 IPOs.", CompareArgs, compare_ipos),
+        Tool("get_quantitative_score", "The engine's research score with components, weights, coverage, config version and calculation time.",
+             IpoArg, get_quantitative_score),
+        Tool("get_verified_financials", "Stored financial statements (INR crore) with provenance.", IpoArg, get_verified_financials),
         Tool("calculate_financial_metrics", "Deterministic ratios: margins, ROE, ROCE, CAGR, cash conversion, leverage.", IpoArg, calculate_financial_metrics),
         Tool("calculate_quality_score", "Fundamental quality score Q with component breakdown.", IpoArg, calculate_quality_score),
         Tool("calculate_valuation_score", "Relative valuation score V versus listed peers.", IpoArg, calculate_valuation_score),
-        Tool("calculate_risk_score", "Risk score R with component breakdown and evidence.", IpoArg, calculate_risk_score),
+        Tool("get_risk_breakdown", "Risk score R with component breakdown and evidence.", IpoArg, get_risk_breakdown),
         Tool("compare_ipo_peers", "Peer multiples table and optional side-by-side with other IPOs.", PeerArgs, compare_ipo_peers),
         Tool("get_official_disclosures", "Stored risk disclosures and offer documents for an IPO.", IpoArg, get_official_disclosures),
-        Tool("search_local_research_documents", "Search ingested offer documents; returns cited passages or no evidence.", SearchArgs, search_local_research_documents),
+        Tool("search_offer_documents", "Search ingested offer documents; returns cited passages or no evidence.", SearchArgs, search_offer_documents),
         Tool("get_historical_comparable_ipos", "Listed IPOs before this issue opened, same sector first.", ComparableArgs, get_historical_comparable_ipos),
         Tool("run_scenario_analysis", "Bear/base/bull hypothetical valuation scenarios.", ScenarioArgs, run_scenario_analysis),
-        Tool("get_data_provenance", "Source records, evidence coverage and missing inputs.", IpoArg, get_data_provenance),
+        Tool("get_source_provenance", "Source records, evidence coverage and missing inputs.", IpoArg, get_source_provenance),
         Tool("generate_research_report", "Generate (and for signed-in users save) a structured research report.", ReportArgs, generate_research_report, writes=True),
     ]
 }
@@ -365,7 +576,7 @@ def execute_tool(ctx: ToolContext, name: str, raw_args: Any) -> ToolCallRecord:
         res, status, summary = None, "error", str(exc)
     except Exception as exc:  # noqa: BLE001 - tool failures must not crash the agent
         res, status, summary = None, "error", f"tool failed: {type(exc).__name__}"
-    return ToolCallRecord(name, args.model_dump(), status, summary, int((time.perf_counter() - t0) * 1000), res)
+    return ToolCallRecord(name, args.model_dump(mode="json"), status, summary, int((time.perf_counter() - t0) * 1000), res)
 
 
 def tool_catalog() -> list[dict[str, Any]]:

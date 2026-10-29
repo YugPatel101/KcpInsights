@@ -41,6 +41,7 @@ class DataStatus(enum.StrEnum):
     imported = "imported"  # user-supplied dataset with stated provenance
     estimated = "estimated"  # analyst estimate / derived assumption
     synthetic = "synthetic"  # demonstration fixture – never a real fact
+    secondary_source = "secondary_source"  # non-authoritative public source (discovery / cross-check only)
     unavailable = "unavailable"
 
 
@@ -227,6 +228,22 @@ class IPOIssue(Base):
     use_of_proceeds: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     listing_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # listing-day open
     listing_data_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # --- live-ingestion fields (Mode C) -------------------------------------------------
+    nse_symbol: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # "actual" once an exchange confirms the listing; "expected" for a computed/announced date
+    listing_date_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    listing_price_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)  # listing_day_open
+    listing_close_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    allotment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    refund_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    demat_credit_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    shares_offered: Mapped[float | None] = mapped_column(Float, nullable=True)
+    registrar: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    lead_managers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    offer_document_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    basis_of_price_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    issue_size_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     risk_disclosures_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
     data_mode: Mapped[str] = mapped_column(String(16), default=DataMode.imported.value, index=True)
     data_status: Mapped[str] = mapped_column(String(16), default=DataStatus.imported.value)
@@ -259,12 +276,16 @@ class IssueEvent(Base):
 
 class SubscriptionSnapshot(Base):
     __tablename__ = "subscription_snapshots"
-    __table_args__ = (UniqueConstraint("ipo_id", "as_of", "category", name="uq_subscription"),)
+    __table_args__ = (UniqueConstraint("ipo_id", "as_of", "category", "basis", name="uq_subscription_basis"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     ipo_id: Mapped[int] = mapped_column(ForeignKey("ipo_issues.id", ondelete="CASCADE"), index=True)
     as_of: Mapped[datetime] = mapped_column(DateTime)
     category: Mapped[str] = mapped_column(String(16))  # qib | nii | retail | employee | total
     times_subscribed: Mapped[float] = mapped_column(Float)
+    # consolidated = all exchanges (official final basis); nse_only = NSE bidding platform only
+    basis: Mapped[str] = mapped_column(String(16), default="consolidated", server_default="consolidated")
+    shares_offered: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_bid: Mapped[float | None] = mapped_column(Float, nullable=True)
     data_status: Mapped[str] = mapped_column(String(16))
     source_record_id: Mapped[int | None] = mapped_column(ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
 
@@ -507,3 +528,84 @@ class ToolCallAudit(Base):
     result_summary: Mapped[str] = mapped_column(Text)
     duration_ms: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Live ingestion: sources, jobs, locks, field-level provenance and change history
+# ---------------------------------------------------------------------------
+class DataSource(Base):
+    __tablename__ = "data_sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(48), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    base_url: Mapped[str] = mapped_column(String(500))
+    authority: Mapped[str] = mapped_column(String(24))  # official | secondary | manual
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    access_mode: Mapped[str] = mapped_column(String(24))  # automatic | manual_only
+    health_status: Mapped[str] = mapped_column(String(24), default="unknown")  # healthy | degraded | down | blocked | unknown
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    requests_made: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class IngestionJob(Base):
+    __tablename__ = "ingestion_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(48), index=True)
+    trigger: Mapped[str] = mapped_column(String(24))  # schedule | admin | startup | agent | cli
+    status: Mapped[str] = mapped_column(String(16))  # running | success | partial | failed | skipped
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    records_discovered: Mapped[int] = mapped_column(Integer, default=0)
+    records_created: Mapped[int] = mapped_column(Integer, default=0)
+    records_updated: Mapped[int] = mapped_column(Integer, default=0)
+    fields_changed: Mapped[int] = mapped_column(Integer, default=0)
+    requests_made: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class JobLock(Base):
+    """Cross-process mutex so the same job never runs twice concurrently."""
+
+    __tablename__ = "job_locks"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64))
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class FieldObservation(Base):
+    """One observed value of one IPO field from one source at one time (history is kept)."""
+
+    __tablename__ = "field_observations"
+    __table_args__ = (Index("ix_obs_ipo_field", "ipo_id", "field", "observed_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ipo_id: Mapped[int] = mapped_column(ForeignKey("ipo_issues.id", ondelete="CASCADE"))
+    field: Mapped[str] = mapped_column(String(48))
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-encoded
+    source_key: Mapped[str] = mapped_column(String(48))
+    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)  # first seen
+    last_verified_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)  # last time the source confirmed it
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    data_status: Mapped[str] = mapped_column(String(24))
+    basis: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    applied: Mapped[bool] = mapped_column(Boolean, default=True)  # false when a higher-authority value was kept
+    conflict: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class FieldChange(Base):
+    """Audit trail of changes to important IPO fields (dates, price band, listing)."""
+
+    __tablename__ = "field_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ipo_id: Mapped[int] = mapped_column(ForeignKey("ipo_issues.id", ondelete="CASCADE"), index=True)
+    field: Mapped[str] = mapped_column(String(48))
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_key: Mapped[str] = mapped_column(String(48))
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

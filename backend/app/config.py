@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     external_llm_api_key: str = Field(default="", repr=False)
 
     # Agent limits (prevent runaway loops)
-    agent_max_steps: int = 6
+    # Model-written interpretive paragraphs in reports. Off by default: with qwen2.5:3b they inverted score directions
+    # in about half of test runs. Enable only with a larger local model and review the output.
+    ai_report_narratives: bool = False
+    agent_max_steps: int = 3  # model planning rounds; each may request up to 3 tools
     agent_max_tool_calls: int = 12
     agent_deadline_seconds: float = 75.0
     agent_max_context_chars: int = 24_000
@@ -70,6 +73,24 @@ class Settings(BaseSettings):
     source_fetch_max_mb: int = 25
     source_fetch_min_interval_seconds: float = 5.0
     source_user_agent: str = "KcpInsights-Research/1.0 (educational; manual-trigger)"
+
+    # --- Live ingestion (Mode C) ----------------------------------------------------------
+    scheduler_enabled: bool = True  # in-process scheduler inside the API (also: `python -m app.cli worker`)
+    ingest_enabled: bool = True
+    ingest_min_request_interval_seconds: float = 2.5  # per host, never concurrent
+    ingest_discovery_minutes: int = 360
+    ingest_details_minutes: int = 360
+    ingest_subscription_minutes: int = 20
+    ingest_listing_minutes: int = 45
+    ingest_health_minutes: int = 30
+    ingest_documents_minutes: int = 1440
+    ingest_listing_window_days: int = 120  # how far back recently listed issues are imported
+    ingest_max_detail_fetches_per_run: int = 15
+    ingest_download_offer_documents: bool = False  # opt-in: RHP zips can be tens of MB each
+    ingest_max_offer_document_mb: int = 60
+    # Freshness thresholds used for stale-data warnings
+    stale_subscription_minutes: int = 120
+    stale_issue_details_hours: int = 24
 
     @property
     def is_production(self) -> bool:

@@ -46,6 +46,17 @@ def _model_present(wanted: str, names: list[str]) -> bool:
     return wanted in names or w in names
 
 
+def _uses_task_prefix(model: str) -> bool:
+    # nomic-embed-text is trained with "search_query:" / "search_document:" prefixes; without them ranking is noticeably worse
+    return model.split(":")[0].endswith("nomic-embed-text")
+
+
+def embedding_signature(settings: Settings | None = None) -> str:
+    """Identifies how stored vectors were made, so vectors from another model or prefix scheme are never compared."""
+    model = (settings or get_settings()).ollama_embed_model
+    return f"{model}+task-prefix" if _uses_task_prefix(model) else model
+
+
 class OllamaProvider:
     name = "ollama"
 
@@ -90,7 +101,10 @@ class OllamaProvider:
             raise ProviderError("model returned non-object JSON")
         return data
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
+        """Embed passages (kind="document") or a search query (kind="query")."""
+        if _uses_task_prefix(self.s.ollama_embed_model):
+            texts = [f"search_{kind}: {t}" for t in texts]
         try:
             r = self.client.post("/api/embed", json={"model": self.s.ollama_embed_model, "input": texts}, timeout=60)
             r.raise_for_status()
@@ -145,7 +159,7 @@ class ExternalProvider:
             raise ProviderError("model returned non-object JSON")
         return data
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
         raise ProviderError("external provider does not provide embeddings")
 
 

@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.models import DocumentChunk, ResearchReport, SourceDocument, WatchlistItem
 from app.services import prediction
-from app.services.ipo_service import all_ipos, get_active_config_row, score_ipo, score_summary, serialize_ipo_summary
+from app.services.ipo_service import all_ipos, get_active_config_row, include_demo_default, score_ipo, score_summary, serialize_ipo_summary
 from app.services.llm_provider import reset_health_cache, select_provider
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -72,9 +72,10 @@ def train_model(body: TrainIn, request: Request, db: Session = Depends(get_db), 
 
 
 @router.get("/dashboard/summary")
-def dashboard(db: Session = Depends(get_db), ctx: AuthContext | None = Depends(optional_user)) -> dict[str, Any]:
+def dashboard(db: Session = Depends(get_db), ctx: AuthContext | None = Depends(optional_user), include_demo: bool | None = None) -> dict[str, Any]:
     today = date.today()
-    ipos = all_ipos(db)
+    show_demo = include_demo_default(db) if include_demo is None else include_demo
+    ipos = [i for i in all_ipos(db) if show_demo or i.data_mode != "demo"]
     rows = []
     stale = []
     for ipo in ipos:
@@ -107,6 +108,8 @@ def dashboard(db: Session = Depends(get_db), ctx: AuthContext | None = Depends(o
         "totals": {"ipos": len(rows), "by_status": by_status, "documents": docs,
                    "issue_size_open_upcoming_cr": round(sum(r["issue_size_cr"] or 0 for r in upcoming), 2)},
         "data_modes": {m: sum(1 for r in rows if r["data_mode"] == m) for m in ("demo", "imported", "source")},
+        "demo_included": show_demo,
+        "demo_available": any(i.data_mode == "demo" for i in all_ipos(db)),
         "synthetic_share": round(sum(1 for r in rows if r["data_status"] == "synthetic") / len(rows), 4) if rows else 0.0,
         "upcoming": upcoming[:8],
         "recently_listed": listed[:8],

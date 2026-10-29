@@ -33,6 +33,39 @@ def test_relevance_threshold_no_evidence(db):
     assert rag.search(db, "the of and")["no_evidence"]
 
 
+class FakeEmbedder:
+    """Bag-of-words vectors: deterministic, offline, and similar for passages sharing words."""
+
+    VOCAB = ("customers", "revenue", "proceeds", "plant", "debt", "demand")
+
+    def __init__(self) -> None:
+        self.kinds: list[str] = []
+
+    def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
+        self.kinds.append(kind)
+        return [[float(w in t.lower()) + 0.01 for w in self.VOCAB] for t in texts]
+
+
+def test_partly_embedded_corpus_searches_every_document_until_backfilled(db, monkeypatch):
+    from app.services.llm_provider import embedding_signature
+
+    fake = FakeEmbedder()
+    monkeypatch.setattr(rag, "embedding_provider", lambda: fake)
+    a = rag.ingest_text_document(db, ipo_id=None, title="A", doc_type="other", text="Top customers drive revenue.", source_url=None, user_id=None)
+    assert a.embedding_model == embedding_signature()
+    # stored before an embedding model was available
+    rag.ingest_text_document(db, ipo_id=None, title="B", doc_type="other", text="Proceeds fund a new plant.", source_url=None, user_id=None, embed=False)
+    res = rag.search(db, "plant proceeds")
+    assert res["mode"] == "keyword" and res["results"][0]["document_title"] == "B"  # B is not hidden by A's embeddings
+    assert rag.embed_missing(db) == (1, 1)
+    res = rag.search(db, "plant proceeds")
+    assert res["mode"] == "embedding" and res["results"][0]["document_title"] == "B" and fake.kinds[-1] == "query"
+    # vectors made another way (e.g. before task prefixes) are never compared with new ones
+    a.embedding_model = "nomic-embed-text"
+    db.commit()
+    assert rag.search(db, "plant proceeds")["mode"] == "keyword" and rag.embed_missing(db) == (1, 1)
+
+
 def test_pdf_validation(db):
     with pytest.raises(rag.DocumentError):
         rag.extract_pdf_pages(b"MZ\x90\x00 not a pdf")

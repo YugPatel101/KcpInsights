@@ -167,3 +167,29 @@ export function PeerDistributionChart({ peers, ipoMultiple, low, high, median, l
     </div>
   );
 }
+
+/** Listing-day returns of recent listings (verified issue and listing prices only). Single axis in percent. */
+export function ListingReturnsChart({ items }: { items: { name: string; ret: number; date: string }[] }) {
+  const router = useRouter();
+  const data = [...items].sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <div style={{ height: Math.max(180, data.length * 34 + 40) }} role="img" aria-label="Listing-day return per recent IPO in percent">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+          <CartesianGrid stroke={GRID} horizontal={false} />
+          <XAxis type="number" tick={AXIS} tickLine={false} axisLine={false} unit="%" />
+          <YAxis type="category" dataKey="name" tick={{ ...AXIS, fontSize: 11 }} tickLine={false} axisLine={false} width={150} />
+          <ReferenceLine x={0} stroke="rgba(255,255,255,0.3)" />
+          <Tooltip {...tooltipStyle} formatter={(v) => [`${typeof v === "number" ? v.toFixed(2) : v}%`, "Listing-day open vs issue price"]}
+            labelFormatter={(l, p) => `${l} · listed ${(p?.[0]?.payload as { date?: string })?.date ?? ""}`} />
+          <Bar dataKey="ret" radius={[0, 4, 4, 0]} maxBarSize={16} cursor="pointer"
+            onClick={(d) => { const id = (d as unknown as { payload?: { id?: number } }).payload?.id; if (id) router.push(`/ipos/${id}`); }}>
+            {data.map((d) => (
+              <Cell key={d.name} fill={d.ret >= 0 ? SERIES[2] : SERIES[1]} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}

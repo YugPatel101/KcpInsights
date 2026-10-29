@@ -13,3 +13,4 @@ numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
 pypdf>=4.3
+apscheduler>=3.10,<4

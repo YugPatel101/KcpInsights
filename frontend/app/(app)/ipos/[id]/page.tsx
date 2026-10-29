@@ -4,7 +4,11 @@ import Link from "next/link";
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Brain, FileText, Star } from "lucide-react";
+import ChatDrawer from "@/components/agent/ChatDrawer";
 import DocumentsPanel from "@/components/ipo/DocumentsPanel";
+import KeyDates from "@/components/live/KeyDates";
+import ProvenancePanel from "@/components/live/ProvenancePanel";
+import SubscriptionTable from "@/components/live/SubscriptionTable";
 import FinancialsPanel from "@/components/ipo/FinancialsPanel";
 import ScenarioPanel from "@/components/ipo/ScenarioPanel";
 import ScoreBreakdown from "@/components/ipo/ScoreBreakdown";
@@ -30,6 +34,7 @@ import {
 import { api, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { fmtCr, fmtDate, fmtDateTime, fmtInr, fmtInt, fmtNum, fmtPct, priceBand, titleCase } from "@/lib/format";
+import { timeAgo } from "@/lib/time";
 import { useApi } from "@/lib/useApi";
 import type { IpoDetail, Prediction, ScoreResult } from "@/lib/types";
 
@@ -41,7 +46,10 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
   const router = useRouter();
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
-  const detail = useApi<IpoDetail>(Number.isInteger(ipoId) && ipoId > 0 ? `/api/ipos/${ipoId}?u=${user?.id ?? 0}` : null);
+  const [pollMs, setPollMs] = useState<number>(180_000);
+  // database polling only: open issues refresh every minute, others every 3 minutes
+  const detail = useApi<IpoDetail>(Number.isInteger(ipoId) && ipoId > 0 ? `/api/ipos/${ipoId}?u=${user?.id ?? 0}` : null, { refreshMs: pollMs });
+  const [chatOpen, setChatOpen] = useState(false);
   const scores = useApi<ScoreResult>(tab === "scores" ? `/api/ipos/${ipoId}/scores` : null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,6 +60,8 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
   const d = detail.data;
   if (!d) return null;
   const s = d.scores;
+  const wantPoll = d.status === "open" ? 60_000 : 180_000;
+  if (wantPoll !== pollMs) setPollMs(wantPoll);
 
   const toggleWatch = async () => {
     if (!user) return router.push(`/login?next=/ipos/${ipoId}`);
@@ -96,7 +106,7 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
             <button onClick={toggleWatch} className={buttonClass.secondary} disabled={busy === "watch"} aria-pressed={d.watchlisted}>
               <Star className={`size-4 ${d.watchlisted ? "fill-amber-300 text-amber-300" : ""}`} aria-hidden /> {d.watchlisted ? "Watching" : "Watch"}
             </button>
-            <Link href={`/workspace?ipo=${ipoId}`} className={buttonClass.secondary}><Brain className="size-4" aria-hidden /> Ask AI</Link>
+            <button onClick={() => setChatOpen(true)} className={buttonClass.secondary}><Brain className="size-4" aria-hidden /> Ask AI</button>
             <button onClick={generateReport} className={buttonClass.primary} disabled={busy === "report"}>
               {busy === "report" ? <Spinner /> : <FileText className="size-4" aria-hidden />} Generate report
             </button>
@@ -104,6 +114,15 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
         }
       />
       {actionMsg && <div className="mb-4"><Notice>{actionMsg}</Notice></div>}
+      {d.freshness.live && (
+        <p className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+          <span className="inline-flex items-center gap-1.5"><span className={`size-2 rounded-full ${d.freshness.is_stale ? "bg-amber-400" : "bg-emerald-400"}`} aria-hidden />
+            Live record from {d.source?.url ? <a href={d.source.url} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline">NSE</a> : "NSE"}{d.nse_symbol ? ` (${d.nse_symbol})` : ""}</span>
+          <span>last verified {timeAgo(d.freshness.last_verified_at)}</span>
+          {detail.refreshing && <span>refreshing…</span>}
+        </p>
+      )}
+      {d.freshness.is_stale && <div className="mb-4"><Notice tone="warn">Possibly out of date: {d.freshness.stale_reasons.join("; ")}. Showing the last known values.</Notice></div>}
       {d.data_mode === "demo" && (
         <div className="mb-6">
           <Notice tone="synthetic">
@@ -142,7 +161,13 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
       {tab === "scenarios" && <ScenarioPanel ipoId={ipoId} />}
       {tab === "risks" && <Risks d={d} />}
       {tab === "documents" && <DocumentsPanel ipoId={ipoId} documents={d.documents} onChange={detail.reload} />}
-      {tab === "sources" && <SourcesPanel ipoId={ipoId} />}
+      {tab === "sources" && (
+        <div className="space-y-6">
+          <ProvenancePanel ipoId={ipoId} />
+          <SourcesPanel ipoId={ipoId} />
+        </div>
+      )}
+      <ChatDrawer ipoId={ipoId} companyName={d.company_name} open={chatOpen} onClose={() => setChatOpen(false)} />
 
       <Disclaimer className="mt-10" />
     </>
@@ -151,7 +176,6 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
 
 function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
   const prediction = useApi<Prediction>(`/api/ipos/${d.id}/prediction`);
-  const subs = d.subscription;
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="space-y-6 lg:col-span-2">
@@ -181,7 +205,7 @@ function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
           <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
             {[
               ["Opens / closes", `${fmtDate(d.open_date)} – ${fmtDate(d.close_date)}`],
-              ["Listing date", fmtDate(d.listing_date)],
+              [d.listing_date_status === "expected" ? "Listing date (expected, T+3 estimate)" : "Listing date", fmtDate(d.listing_date)],
               ["Issue size", fmtCr(d.issue_size_cr)],
               ["Fresh issue / OFS", `${fmtCr(d.fresh_issue_cr)} / ${fmtCr(d.ofs_cr)}`],
               ["Final issue price", fmtInr(d.final_issue_price)],
@@ -189,11 +213,23 @@ function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
               ["Pre / post-issue shares", `${fmtInt(d.pre_issue_shares)} / ${fmtInt(d.post_issue_shares)}`],
               ["Dilution from fresh issue", fmtPct(d.dilution_pct, 2)],
               ["Promoter holding pre → post", `${fmtPct(d.promoter_holding_pre_pct)} → ${fmtPct(d.promoter_holding_post_pct)}`],
-              ["Listing price", d.listing_price !== null ? `${fmtInr(d.listing_price)} (${fmtPct(d.listing_return_pct, 1, true)})` : "—"],
+              ["Listing-day open", d.listing_price !== null ? `${fmtInr(d.listing_price)}${d.listing_return_pct !== null ? ` (${fmtPct(d.listing_return_pct, 1, true)} vs issue price)` : ""}` : "—"],
+              ["Listing-day close", fmtInr(d.listing_close_price ?? null)],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4 border-b border-white/5 py-1.5"><dt className="text-slate-400">{k}</dt><dd className="text-right tabular-nums text-slate-200">{v}</dd></div>
             ))}
           </dl>
+          {(d.registrar || d.lead_managers || d.offer_document_url || d.issue_size_text) && (
+            <div className="mt-5 space-y-1.5 text-sm">
+              {d.registrar && <p><span className="text-slate-500">Registrar: </span><span className="text-slate-300">{d.registrar}</span></p>}
+              {d.lead_managers && <p><span className="text-slate-500">Lead managers: </span><span className="text-slate-300">{d.lead_managers}</span></p>}
+              {d.issue_size_text && <p className="text-xs leading-5 text-slate-500">Issue as published: {d.issue_size_text}</p>}
+              <p className="flex flex-wrap gap-3 text-xs">
+                {d.offer_document_url && <a className="text-sky-300 hover:underline" href={d.offer_document_url} target="_blank" rel="noopener noreferrer">Red Herring Prospectus (NSE, zip)</a>}
+                {d.basis_of_price_url && <a className="text-sky-300 hover:underline" href={d.basis_of_price_url} target="_blank" rel="noopener noreferrer">Basis of issue price (NSE, zip)</a>}
+              </p>
+            </div>
+          )}
           {d.use_of_proceeds && d.use_of_proceeds.length > 0 && (
             <div className="mt-5">
               <h3 className="mb-2 text-xs uppercase tracking-wider text-slate-500">Use of fresh-issue proceeds</h3>
@@ -209,18 +245,8 @@ function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
       </div>
 
       <div className="space-y-6">
-        <Panel title="Subscription" subtitle={subs ? `as of ${fmtDateTime(subs.as_of)}` : undefined}>
-          {subs ? (
-            <dl className="space-y-1.5 text-sm">
-              {Object.entries(subs.categories).map(([k, v]) => (
-                <div key={k} className="flex justify-between"><dt className="text-slate-400">{k === "nii" ? "NII" : k === "qib" ? "QIB" : titleCase(k)}</dt><dd className="tabular-nums text-slate-200">{fmtNum(v, 2)}x</dd></div>
-              ))}
-              <div className="pt-2"><DataStatusBadge status={subs.data_status[0]} /></div>
-            </dl>
-          ) : (
-            <p className="text-sm text-slate-500">No subscription data stored. Figures are only shown when sourced.</p>
-          )}
-        </Panel>
+        <KeyDates ipoId={d.id} dates={d.key_dates} />
+        <SubscriptionTable ipoId={d.id} live={d.status === "open"} />
 
         <Panel title="Grey-market premium">
           <p className="mb-3 text-xs leading-5 text-amber-200/80">{d.grey_market.caveat}</p>

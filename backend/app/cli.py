@@ -104,6 +104,19 @@ def cmd_train(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_embed(_a: argparse.Namespace) -> int:
+    from app.services import rag
+    from app.services.llm_provider import ProviderError
+
+    try:
+        docs, chunks = rag.embed_missing(_db())
+    except ProviderError as exc:
+        print(f"error: {exc}. Start Ollama and pull the embedding model (see README).", file=sys.stderr)
+        return 1
+    print(f"embedded {chunks} chunks in {docs} document(s); document search now uses embeddings when every document in scope has them")
+    return 0
+
+
 def cmd_ingest(a: argparse.Namespace) -> int:
     from app.services import rag
 
@@ -116,6 +129,42 @@ def cmd_ingest(a: argparse.Namespace) -> int:
         doc = rag.ingest_text_document(db, ipo_id=a.ipo_id, title=a.title or p.stem, doc_type=a.doc_type, text=data.decode("utf-8", "replace"),
                                        source_url=a.url, user_id=None)
     print(f"document {doc.id}: {doc.page_count} pages, {len(doc.chunks)} chunks, embeddings: {doc.embedding_model or 'none (keyword search)'}")
+    return 0
+
+
+def cmd_sync(a: argparse.Namespace) -> int:
+    """Run ingestion jobs now (fetches public NSE data; respects rate limits)."""
+    from app.ingestion.ingestion_scheduler import get_runner
+
+    out = get_runner().run(a.job, "cli")
+    runs = out["runs"] if a.job == "all" else [out]
+    for r in runs:
+        warnings = r["detail"].pop("warnings", [])
+        print(f"{r['job_type']:<14} {r['status']:<8} discovered={r['records_discovered']} created={r['records_created']} "
+              f"updated={r['records_updated']} fields_changed={r['fields_changed']} requests={r['requests_made']} "
+              f"errors={len(r['errors'])} warnings={len(warnings)} {json.dumps(r['detail'], default=str)[:200]}")
+    return 0 if all(r["status"] in ("success", "partial", "skipped") for r in runs) else 1
+
+
+def cmd_worker(_: argparse.Namespace) -> int:
+    """Run only the ingestion scheduler (use when the API runs without KCP_SCHEDULER_ENABLED)."""
+    import signal
+    import time
+
+    from app.ingestion.ingestion_scheduler import scheduler_status, start_scheduler, stop_scheduler
+
+    start_scheduler()
+    print("ingestion worker running — Ctrl+C to stop")
+    for j in scheduler_status().get("jobs", []):
+        print(f"  {j['id']:<14} every {j['interval_minutes']} min, next {j['next_run_at']}")
+    stop = {"flag": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
+    try:
+        while not stop["flag"]:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    stop_scheduler()
     return 0
 
 
@@ -136,6 +185,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("train-model", help="train/evaluate the listing-outcome baselines on stored real data")
     p.add_argument("--synthetic", action="store_true", help="pipeline test on a clearly labelled synthetic dataset")
     p.set_defaults(fn=cmd_train)
+    p = sub.add_parser("sync", help="fetch live IPO data now (NSE public feeds)")
+    p.add_argument("job", nargs="?", default="all", choices=["all", "discover", "details", "subscriptions", "listings", "documents", "health"])
+    p.set_defaults(fn=cmd_sync)
+    sub.add_parser("worker", help="run the ingestion scheduler as a standalone process").set_defaults(fn=cmd_worker)
+    sub.add_parser("embed", help="add local embeddings to documents stored without them").set_defaults(fn=cmd_embed)
     p = sub.add_parser("ingest", help="ingest a local PDF/TXT offer document")
     p.add_argument("path")
     p.add_argument("--ipo-id", type=int)

@@ -8,7 +8,8 @@ import SectionTitle from "@/components/dashboard/SectionTitle";
 import StatCard from "@/components/dashboard/StatCard";
 import UpcomingTable from "@/components/dashboard/UpcomingTable";
 import Watchlist from "@/components/dashboard/Watchlist";
-import { QualityRiskScatter } from "@/components/charts/Charts";
+import { ListingReturnsChart, QualityRiskScatter } from "@/components/charts/Charts";
+import LiveDataBar from "@/components/live/LiveDataBar";
 import { EmptyState, ErrorState, LoadingBlock, Notice, Panel } from "@/components/kcp/ui";
 import { useAuth } from "@/lib/auth";
 import { fmtCr, fmtDateTime } from "@/lib/format";
@@ -18,12 +19,14 @@ import type { DashboardSummary, ModelsStatus } from "@/lib/types";
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   // refetch after sign-in so the user's watchlist and reports appear
-  const { data, error, loading, reload } = useApi<DashboardSummary>(authLoading ? null : `/api/dashboard/summary?u=${user?.id ?? 0}`);
+  // reads the database every 2 minutes while visible; never triggers upstream fetches
+  const { data, error, loading, reload } = useApi<DashboardSummary>(authLoading ? null : `/api/dashboard/summary?u=${user?.id ?? 0}`, { refreshMs: 120_000 });
   const models = useApi<ModelsStatus>("/api/models/status");
 
   return (
     <>
       <DashboardHeader asOf={data?.as_of} />
+      <LiveDataBar />
       {error && <ErrorState message={error} onRetry={reload} />}
       {loading && !data && <LoadingBlock rows={6} />}
       {data && (
@@ -36,7 +39,7 @@ export default function DashboardPage() {
             />
           ) : (
             <>
-              {data.synthetic_share > 0 && (
+              {data.demo_included && data.synthetic_share > 0 && (
                 <Notice tone="synthetic">
                   {Math.round(data.synthetic_share * 100)}% of the IPOs shown are <strong>synthetic demonstration records</strong> about fictional
                   companies. They exercise the pipeline and earn no evidence credit; they are not real market data.
@@ -75,6 +78,15 @@ export default function DashboardPage() {
                   <Link href="/settings" className="mt-4 inline-block text-sm text-sky-300 hover:underline">Model & provider details</Link>
                 </Panel>
               </div>
+
+              {(() => {
+                const rets = data.recently_listed.filter((r) => r.listing_return_pct !== null).map((r) => ({ id: r.id, name: r.company_name, ret: r.listing_return_pct as number, date: r.listing_date ?? "" }));
+                return (
+                  <Panel title="Listing-day performance" subtitle="Listing-day open vs final issue price, recent listings with verified prices only. Past listings do not predict future ones.">
+                    {rets.length ? <ListingReturnsChart items={rets} /> : <EmptyState title="No verified listing prices yet" body="Listing prices come from the official NSE bhavcopy after a sync." />}
+                  </Panel>
+                );
+              })()}
 
               <MarketOverview data={data} />
 

@@ -15,7 +15,7 @@ def test_migrations_create_schema(db):
 def test_health_and_empty_state(client):
     assert client.get("/api/health").json()["database"] == "ok"
     r = client.get("/api/ipos")
-    assert r.status_code == 200 and r.json() == {"items": [], "total": 0, "page": 1, "page_size": 20}
+    assert r.status_code == 200 and r.json() == {"items": [], "total": 0, "page": 1, "page_size": 20, "demo_included": True}
     dash = client.get("/api/dashboard/summary").json()
     assert dash["totals"]["ipos"] == 0 and dash["scatter"] == []
 
