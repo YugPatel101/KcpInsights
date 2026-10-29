@@ -1,0 +1,35 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# Backend
+backend/.venv/
+backend/data/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.db-wal
+*.db-shm
+
+# Private uploads, caches, model files
+uploads/
+*.gguf
+*.safetensors
+*.bin
+ollama/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+*.tsbuildinfo

@@ -1,21 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// Self-hosted font files (no network fetch at build or dev time — the app works offline).
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-import AuroraBackground from "@/components/common/AuroraBackground";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { AuthProvider } from "@/lib/auth";
 
 export const metadata: Metadata = {
-  title: "KcpInsights",
-  description: "AI-powered IPO Research Platform for Educational Purposes",
+  title: { default: "KcpInsights", template: "%s · KcpInsights" },
+  description: "Educational IPO research platform with transparent quantitative scoring and an evidence-citing research agent.",
 };
 
 export default function RootLayout({
@@ -24,16 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
+    <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}>
       <body className="relative min-h-screen overflow-x-hidden bg-black text-white">
-        <AuroraBackground />
-
-        <main className="relative z-10 min-h-screen">
-          {children}
-        </main>
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-black">
+          Skip to content
+        </a>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
