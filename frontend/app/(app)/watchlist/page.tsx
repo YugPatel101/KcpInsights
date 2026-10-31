@@ -13,12 +13,12 @@ function List() {
   const { data, error, loading, reload } = useApi<(IpoSummary & { watched_at: string })[]>("/api/watchlist");
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (loading || !data) return <LoadingBlock />;
-  if (!data.length) return <EmptyState title="Your watchlist is empty" body="Use “Watch” on an IPO research page." action={<Link href="/ipos" className="text-sky-300 hover:underline">Browse IPOs</Link>} />;
+  if (!data.length) return <EmptyState title="Your watchlist is empty" body="Use “Watch” on an IPO research page." action={<Link href="/ipos" className="text-brand-ink hover:underline">Browse IPOs</Link>} />;
   return (
     <div className="space-y-3">
       {data.map((i) => (
         <IPOCard key={i.id} ipo={i}>
-          <span className="hidden text-xs text-slate-500 md:inline">Opens {fmtDate(i.open_date)}</span>
+          <span className="hidden text-xs text-ink-3 md:inline">Opens {fmtDate(i.open_date)}</span>
           <button className={buttonClass.ghost} onClick={async () => { await api(`/api/ipos/${i.id}/watch`, { method: "DELETE" }); reload(); }} aria-label={`Remove ${i.company_name} from watchlist`}>Remove</button>
         </IPOCard>
       ))}

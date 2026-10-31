@@ -10,13 +10,11 @@ sleeping free-tier host does not run it; see README → "Live data".
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 import socket
 import threading
 import uuid
-import zipfile
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import date, timedelta
@@ -29,18 +27,21 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import get_settings
 from app.ingestion import ipo_data_service as svc
 from app.ingestion.data_quality_service import is_open_today
-from app.ingestion.http import PoliteClient, SourceError
+from app.ingestion.http import PoliteClient
 from app.ingestion.source_registry import ensure_sources, record_source_result
 from app.ingestion.sources.base import IssueRecord
 from app.ingestion.sources.bse import BSEPublicIssuesSource
-from app.ingestion.sources.nse import NSEBhavcopySource, NSEOfficialSource
-from app.models import DataSource, FieldObservation, IngestionJob, IPOIssue, JobLock, SourceDocument, utcnow
+from app.ingestion.sources.nse import NSEBhavcopySource, NSEEquityList, NSEOfficialSource
+from app.ingestion.sources.sebi import SEBIFilingsSource
+from app.models import DataSource, FieldObservation, IngestionJob, IPOIssue, JobLock, PeerSnapshot, utcnow
 
 log = logging.getLogger("kcp.ingestion")
 
-JOB_TYPES = ("discover", "details", "subscriptions", "listings", "documents", "health")
+JOB_TYPES = ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "health")
 JOB_LOCK = {"discover": "source:nse", "details": "source:nse", "subscriptions": "source:nse", "listings": "source:nse",
-            "documents": "source:nse_archives", "health": "source:health"}
+            "filings": "source:sebi", "documents": "source:documents", "peers": "source:nse_archives", "health": "source:health"}
+# DataSource row that a job's requests and health are attributed to
+JOB_SOURCE = {"listings": "nse_bhavcopy", "health": "bse_ipo", "documents": "nse_rhp", "filings": "sebi_offer_documents", "peers": "nse_equity_list"}
 OWNER = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
 
 
@@ -90,13 +91,15 @@ class IngestionRunner:
         self.nse = NSEOfficialSource(self.client)
         self.bhav = NSEBhavcopySource(self.client)
         self.bse = BSEPublicIssuesSource(self.client)
+        self.sebi = SEBIFilingsSource(self.client)
+        self.equity_list = NSEEquityList(self.client)
         self.today = today
         self._mutex = threading.Lock()
 
     # ---------------------------------------------------------------- orchestration
     def run(self, job_type: str, trigger: str = "schedule") -> dict[str, Any]:
         if job_type == "all":
-            results = [self.run(j, trigger) for j in ("discover", "details", "subscriptions", "listings")]
+            results = [self.run(j, trigger) for j in ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers")]
             return {"job_type": "all", "runs": results}
         if job_type not in JOB_TYPES:
             raise ValueError(f"unknown job {job_type!r}")
@@ -125,7 +128,7 @@ class IngestionRunner:
             finally:
                 job.requests_made = self.client.requests_made - before
                 release_lock(db, lock)
-                src_key = {"listings": "nse_bhavcopy", "health": "bse_ipo"}.get(job_type, "nse_ipo")
+                src_key = JOB_SOURCE.get(job_type, "nse_ipo")
                 src_row = ensure_sources(db).get(src_key)
                 if src_row is not None and job_type != "health":
                     src_row.requests_made += job.requests_made
@@ -153,53 +156,30 @@ class IngestionRunner:
             job.detail = {**(job.detail or {}), "warnings": [*(job.detail or {}).get("warnings", []), *st.warnings][-100:]}
 
     def _upsert_records(self, db: Session, job: IngestionJob, records: list[IssueRecord], source_key: str) -> None:
+        changed: set[int] = set()
         for rec in records:
             try:
                 with db.begin_nested():
                     st = svc.upsert_issue(db, rec, source_key=source_key)
                 self._apply_stats(job, st)
+                changed |= st.changed_ipo_ids
             except Exception as exc:  # noqa: BLE001 - one bad record must not abort the run
                 job.errors = [*job.errors, {"symbol": rec.symbol, "error": f"{type(exc).__name__}: {exc}"[:300]}]
         db.commit()
+        self._rescore(db, job, changed)
 
-    def refresh_single(self, ipo_id: int, min_age_minutes: int = 10) -> dict[str, Any]:
-        """Bounded on-demand refresh of one live IPO (one upstream request), e.g. for the research agent."""
-        db = self.session_factory()
+    @staticmethod
+    def _rescore(db: Session, job: IngestionJob, ipo_ids: set[int] | None) -> None:
+        """Scores and completeness are stored, not computed per request: refresh them for IPOs whose inputs changed."""
+        from app.services.ipo_service import refresh_scores
+
         try:
-            ipo = db.get(IPOIssue, ipo_id)
-            if ipo is None or not ipo.nse_symbol:
-                return {"refreshed": False, "reason": "not a live NSE record"}
-            if ipo.last_verified_at and utcnow() - ipo.last_verified_at < timedelta(minutes=min_age_minutes):
-                return {"refreshed": False, "reason": f"verified {int((utcnow() - ipo.last_verified_at).total_seconds() // 60)} min ago; no refresh needed"}
-            if not get_settings().ingest_enabled:
-                return {"refreshed": False, "reason": "ingestion disabled"}
-            if not acquire_lock(db, "source:nse", minutes=2):
-                return {"refreshed": False, "reason": "a scheduled sync is running; using stored data"}
-            job = IngestionJob(job_type="details", trigger="agent", status="running", detail={"ipo_id": ipo_id, "owner": OWNER})
-            db.add(job)
-            db.commit()
-            before = self.client.requests_made
-            try:
-                with self._mutex:
-                    res = self.nse.fetch_ipo_details(ipo.nse_symbol, "SME" if ipo.issue_type == "sme" else "EQ")
-                    if res.status != "ok" or res.data is None:
-                        job.errors = [{"symbol": ipo.nse_symbol, "error": res.error}]
-                        self._finish(db, job, "failed")
-                        return {"refreshed": False, "reason": f"source unavailable ({res.error}); using stored data"}
-                    rec, subs = res.data
-                    rec.company_name = ipo.company.name
-                    st = svc.upsert_issue(db, rec, source_key="nse_ipo")
-                    added = svc.upsert_subscriptions(db, ipo, subs)
-                    self._apply_stats(job, st)
-                    job.records_updated += added
-                    db.commit()
-            finally:
-                job.requests_made = self.client.requests_made - before
-                release_lock(db, "source:nse")
-            self._finish(db, job, "success")
-            return {"refreshed": True, "fields_changed": st.fields_changed, "subscription_snapshots_added": added}
-        finally:
-            db.close()
+            res = refresh_scores(db, ipo_ids)
+            job.detail = {**(job.detail or {}), "rescored": res}
+        except Exception as exc:  # noqa: BLE001 - scoring problems must not fail ingestion
+            db.rollback()
+            log.exception("rescoring failed")
+            job.errors = [*job.errors, {"stage": "scoring", "error": f"{type(exc).__name__}: {exc}"[:300]}]
 
     # ---------------------------------------------------------------- jobs
     def job_discover(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
@@ -235,7 +215,10 @@ class IngestionRunner:
         todo = []
         for ipo in self._live_ipos(db):
             relevant = (ipo.close_date is None or ipo.close_date >= today - timedelta(days=3)) or (
-                ipo.listing_date is not None and ipo.listing_date >= today - timedelta(days=10) and ipo.company.sector == "Unclassified")
+                ipo.listing_date is not None and ipo.listing_date >= today - timedelta(days=10) and ipo.company.sector == "Unclassified") or (
+                # listed issues: one details fetch to find the offer-document link for financial statements
+                ipo.offer_document_url is None and ipo.listing_date is not None
+                and ipo.listing_date >= today - timedelta(days=s.document_window_days))
             if not relevant:
                 continue
             obs = svc._latest_obs(db, ipo.id, "face_value")
@@ -243,6 +226,7 @@ class IngestionRunner:
                 todo.append(ipo)
         todo = todo[: s.ingest_max_detail_fetches_per_run]
         failures = 0
+        changed: set[int] = set()
         for ipo in todo:
             series = "SME" if ipo.issue_type == "sme" else "EQ"
             res = self.nse.fetch_ipo_details(ipo.nse_symbol or "", series)
@@ -254,11 +238,14 @@ class IngestionRunner:
             rec.company_name = ipo.company.name  # the detail payload may carry only the symbol
             try:
                 with db.begin_nested():
-                    self._apply_stats(job, svc.upsert_issue(db, rec, source_key="nse_ipo"))
+                    st = svc.upsert_issue(db, rec, source_key="nse_ipo")
+                    self._apply_stats(job, st)
                     svc.upsert_subscriptions(db, ipo, subs)
+                    changed |= st.changed_ipo_ids
             except Exception as exc:  # noqa: BLE001
                 job.errors = [*job.errors, {"symbol": ipo.nse_symbol, "error": f"{type(exc).__name__}: {exc}"[:300]}]
         db.commit()
+        self._rescore(db, job, changed)
         if todo:
             record_source_result(db, "nse_ipo", ok=failures < len(todo), error=job.errors[-1]["error"] if failures else None)
         status = "success" if not job.errors else ("failed" if failures == len(todo) and todo else "partial")
@@ -298,12 +285,14 @@ class IngestionRunner:
                 job.errors = [*job.errors, {"endpoint": "public-past-issues", "error": res.error}]
         # 2) listing-day prices from the official bhavcopy (one file per listing date)
         window = today - timedelta(days=s.ingest_listing_window_days)
-        need = [i for i in self._live_ipos(db) if i.listing_date_status == "actual" and i.listing_price is None and i.listing_date
-                and window <= i.listing_date <= today]
+        # missing listing prices, or a listing-day range not yet stored (cached bhavcopies make that backfill request-free)
+        need = [i for i in self._live_ipos(db) if i.listing_date_status == "actual" and i.listing_date and window <= i.listing_date <= today
+                and (i.listing_price is None or i.listing_high_price is None)]
         by_date: dict[date, list[IPOIssue]] = defaultdict(list)
         for i in need:
             by_date[i.listing_date].append(i)  # type: ignore[index]
         bhav_ok = bhav_fail = 0
+        listed_changed: set[int] = set()
         for d, ipos in sorted(by_date.items()):
             day = self.bhav.fetch_day(d)
             if day.status != "ok" or day.data is None:
@@ -317,8 +306,11 @@ class IngestionRunner:
                 if lp is None:
                     job.detail = {**job.detail, "missing_in_bhavcopy": [*(job.detail or {}).get("missing_in_bhavcopy", []), ipo.nse_symbol]}
                     continue
-                self._apply_stats(job, svc.apply_listing_price(db, ipo, lp))
+                st = svc.apply_listing_price(db, ipo, lp)
+                self._apply_stats(job, st)
+                listed_changed |= st.changed_ipo_ids
         db.commit()
+        self._rescore(db, job, listed_changed)
         if by_date:
             record_source_result(db, "nse_bhavcopy", ok=bhav_ok > 0 or bhav_fail == 0, error=None if bhav_ok else (job.errors[-1]["error"] if job.errors else "not published"))
         if not pending and not by_date:
@@ -326,28 +318,71 @@ class IngestionRunner:
         return ("success" if not job.errors else "partial"), {"confirmations_checked": len(pending), "listing_days": len(by_date)}
 
     def job_documents(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """Discover, download (only when new/changed), extract and score offer documents."""
         s = get_settings()
         if not s.ingest_download_offer_documents:
-            return "skipped", {"reason": "offer-document download is opt-in (KCP_INGEST_DOWNLOAD_OFFER_DOCUMENTS=true); links are stored on each IPO"}
-        from app.services import rag
+            return "skipped", {"reason": "offer-document processing disabled (KCP_INGEST_DOWNLOAD_OFFER_DOCUMENTS=false)"}
+        from app.ingestion.document_service import run_documents
 
-        candidates = [i for i in self._live_ipos(db) if i.offer_document_url and i.offer_document_url.startswith("https://nsearchives.nseindia.com/")
-                      and not db.execute(select(SourceDocument.id).where(SourceDocument.ipo_id == i.id, SourceDocument.doc_type == "rhp")).first()
-                      and (i.close_date is None or i.close_date >= self.today())]
-        for ipo in candidates[:1]:  # at most one large document per run
-            try:
-                body, _ = self.client.get(ipo.offer_document_url or "", max_bytes=s.ingest_max_offer_document_mb * 1024 * 1024)
-                with zipfile.ZipFile(io.BytesIO(body)) as zf:
-                    pdfs = [n for n in zf.namelist() if n.lower().endswith(".pdf")]
-                    if not pdfs or zf.getinfo(pdfs[0]).file_size > 4 * s.ingest_max_offer_document_mb * 1024 * 1024:
-                        raise SourceError("parse", "no PDF in archive or PDF too large")
-                    data = zf.read(pdfs[0])
-                rag.ingest_pdf_document(db, ipo_id=ipo.id, title=f"{ipo.company.name} — Red Herring Prospectus (NSE)", doc_type="rhp", data=data,
-                                        source_url=ipo.offer_document_url, user_id=None, data_status="verified")
-                job.records_created += 1
-            except (SourceError, zipfile.BadZipFile, rag.DocumentError) as exc:
-                job.errors = [*job.errors, {"symbol": ipo.nse_symbol, "error": str(exc)[:300]}]
-        return ("success" if not job.errors else "partial"), {"candidates": len(candidates)}
+        st = run_documents(db, self.client, self._live_ipos(db), self.today())
+        job.records_discovered = st.discovered
+        job.records_created = st.extracted
+        job.errors = [*job.errors, *st.errors]
+        detail = {"discovered": st.discovered, "downloaded": st.downloaded, "unchanged": st.checked_unchanged, "extracted": st.extracted,
+                  "failed": st.failed, "duplicates": st.duplicates, "dead_letters": st.dead_letters, "pruned_originals": st.pruned,
+                  "processed": st.processed[:10]}
+        return ("success" if not st.errors and not st.failed else "partial"), detail
+
+    def job_filings(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """New SEBI offer-document filings (two listing pages); documents are downloaded later by the documents job."""
+        s = get_settings()
+        if not s.ingest_sebi_filings:
+            return "skipped", {"reason": "SEBI filings discovery disabled (KCP_INGEST_SEBI_FILINGS=false)"}
+        from app.ingestion.document_service import DocRunStats, discover_sebi
+
+        st = DocRunStats()
+        discover_sebi(db, self.sebi, st)
+        job.records_discovered = st.filings_seen
+        job.records_created = st.discovered
+        job.errors = [*job.errors, *st.errors]
+        record_source_result(db, "sebi_offer_documents", ok=len(st.errors) < 2, error=st.errors[-1]["error"] if st.errors else None)
+        self._rescore(db, job, None if st.pipeline_ipos_created else set())
+        return ("success" if not st.errors else ("failed" if len(st.errors) == 2 else "partial")), {
+            "filings_seen": st.filings_seen, "new_documents": st.discovered, "pipeline_ipos_created": st.pipeline_ipos_created}
+
+    def job_peers(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """Latest official close for each listed peer: name → NSE symbol (equity list), price from the latest bhavcopy."""
+        from app.ingestion import normalizer as nz
+
+        peers = list(db.execute(select(PeerSnapshot).where(PeerSnapshot.document_id.is_not(None))).scalars())
+        if not peers:
+            return "skipped", {"reason": "no listed peers on record"}
+        names = self.equity_list.fetch(self.today())
+        if names.status != "ok" or names.data is None:
+            record_source_result(db, "nse_equity_list", ok=False, error=names.error)
+            job.errors = [*job.errors, {"endpoint": "equity list", "error": names.error}]
+            return "failed", {}
+        record_source_result(db, "nse_equity_list", ok=True)
+        day = None
+        for back in range(1, 8):  # the latest published trading day
+            d = self.today() - timedelta(days=back)
+            if d.weekday() >= 5:
+                continue
+            res = self.bhav.fetch_day(d)
+            if res.status == "ok" and res.data:
+                day = (d, res.data)
+                break
+        if day is None:
+            return "partial", {"reason": "no bhavcopy published in the last week"}
+        matched = 0
+        for p in peers:
+            sym = p.nse_symbol or names.data.get(nz.normalize_company_name(p.name))
+            lp = day[1].get(sym or "")
+            if sym and lp is not None:
+                p.nse_symbol, p.latest_price, p.latest_price_date = sym, lp.close_price, day[0]
+                matched += 1
+        db.commit()
+        return "success", {"peers": len(peers), "matched": matched, "price_date": day[0].isoformat()}
 
     def job_health(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
         src = ensure_sources(db)
@@ -363,6 +398,7 @@ class IngestionRunner:
             db.commit()
             checked = True
         stale_obs = db.execute(select(FieldObservation.id).limit(1)).first() is not None
+        self._rescore(db, job, None)  # picks up configuration changes and time-dependent stages; rows are added only on change
         return "success", {"bse_checked": checked, "has_observations": stale_obs}
 
 
@@ -417,7 +453,8 @@ def start_scheduler() -> Any:
     sched = BackgroundScheduler(timezone="Asia/Kolkata", job_defaults={"max_instances": 1, "coalesce": True, "misfire_grace_time": 600})
     now = utcnow()
     plan = [("discover", s.ingest_discovery_minutes, 15), ("details", s.ingest_details_minutes, 90), ("subscriptions", s.ingest_subscription_minutes, 150),
-            ("listings", s.ingest_listing_minutes, 200), ("health", s.ingest_health_minutes, 60), ("documents", s.ingest_documents_minutes, 600)]
+            ("listings", s.ingest_listing_minutes, 200), ("health", s.ingest_health_minutes, 60), ("filings", s.ingest_filings_minutes, 240),
+            ("documents", s.ingest_documents_minutes, 300), ("peers", s.ingest_peer_prices_minutes, 420)]
     import datetime as _dt
 
     for name, minutes, delay in plan:

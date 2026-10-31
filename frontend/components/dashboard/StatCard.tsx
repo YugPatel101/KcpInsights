@@ -1,4 +1,4 @@
-import { LucideIcon } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface StatCardProps {
   title: string;
@@ -7,26 +7,15 @@ interface StatCardProps {
   hint?: string;
 }
 
-export default function StatCard({
-  title,
-  value,
-  icon: Icon,
-  hint,
-}: StatCardProps) {
+export default function StatCard({ title, value, icon: Icon, hint }: StatCardProps) {
   return (
-    <div className="group rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-xl transition-all duration-300 hover:border-slate-500">
-      <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800">
-        <Icon className="h-5 w-5 text-slate-300" aria-hidden />
+    <div className="rounded-lg border border-line bg-surface p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">{title}</p>
+        <Icon className="size-4 text-ink-3" aria-hidden />
       </div>
-
-      <p className="text-2xl font-bold tabular-nums text-white">
-        {value}
-      </p>
-
-      <p className="mt-1 text-sm text-slate-400">
-        {title}
-      </p>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      <p className="mt-1.5 text-2xl font-semibold tabular-nums text-ink">{value}</p>
+      {hint && <p className="mt-0.5 text-xs text-ink-3">{hint}</p>}
     </div>
   );
 }

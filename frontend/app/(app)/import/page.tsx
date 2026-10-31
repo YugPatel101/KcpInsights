@@ -46,14 +46,14 @@ function Importer() {
             type="file"
             accept=".json,.csv"
             onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }}
-            className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-slate-200"
+            className="block w-full text-sm text-ink-2 file:mr-3 file:rounded-lg file:border-0 file:bg-surface-3 file:px-3 file:py-2 file:text-ink"
             aria-label="Import file"
           />
           <div className="mt-4 flex flex-wrap gap-2">
             <button className={buttonClass.secondary} disabled={!file || busy} onClick={() => submit(true)}>{busy && <Spinner />}Validate (dry run)</button>
             <button className={buttonClass.primary} disabled={!file || busy || !rep?.ok || result?.committed} onClick={() => submit(false)}>Commit import</button>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Commit is enabled after a dry run with no blocking errors.</p>
+          <p className="mt-2 text-xs text-ink-3">Commit is enabled after a dry run with no blocking errors.</p>
         </Panel>
 
         {error && <ErrorState message={error} />}
@@ -62,15 +62,15 @@ function Importer() {
             {result.committed && (
               <Notice><CheckCircle2 className="mr-1 inline size-4" /> Dataset #{result.dataset_id} saved: {Object.entries(result.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(", ")}. Scores recalculate automatically. <Link href="/ipos?data_mode=imported" className="underline">View imported IPOs</Link></Notice>
             )}
-            {result.preview?.ipos && <p className="mt-3 text-sm text-slate-300">IPOs in bundle: {result.preview.ipos.join(", ")}</p>}
-            {result.preview?.row_count !== undefined && <p className="mt-3 text-sm text-slate-300">{result.preview.row_count} valid financial row(s).</p>}
+            {result.preview?.ipos && <p className="mt-3 text-sm text-ink-2">IPOs in bundle: {result.preview.ipos.join(", ")}</p>}
+            {result.preview?.row_count !== undefined && <p className="mt-3 text-sm text-ink-2">{result.preview.row_count} valid financial row(s).</p>}
             {(["errors", "warnings", "info"] as const).map((k) =>
               rep[k].length ? (
                 <div key={k} className="mt-4">
-                  <h3 className={`mb-1 text-xs font-semibold uppercase tracking-wider ${k === "errors" ? "text-rose-300" : k === "warnings" ? "text-amber-300" : "text-slate-400"}`}>{k}</h3>
+                  <h3 className={`mb-1 text-xs font-semibold uppercase tracking-wider ${k === "errors" ? "text-neg-ink" : k === "warnings" ? "text-warn-ink" : "text-ink-2"}`}>{k}</h3>
                   <ul className="max-h-64 space-y-1 overflow-y-auto text-sm">
                     {rep[k].map((m, i) => (
-                      <li key={i} className="text-slate-300"><span className="font-mono text-xs text-slate-500">{m.where}</span> — {m.message}</li>
+                      <li key={i} className="text-ink-2"><span className="font-mono text-xs text-ink-3">{m.where}</span> — {m.message}</li>
                     ))}
                   </ul>
                 </div>
@@ -88,7 +88,7 @@ function Importer() {
           </div>
         </Panel>
         <Panel title="Rules">
-          <ul className="list-disc space-y-1.5 pl-4 text-xs leading-5 text-slate-400">
+          <ul className="list-disc space-y-1.5 pl-4 text-xs leading-5 text-ink-2">
             <li>Every record references a source with a title, URL and status. Use official documents (SEBI, NSE, BSE, the company).</li>
             <li>Units: crore, lakh, million, billion, thousand or rupees. Amounts are converted to INR crore; raw values are kept.</li>
             <li>Status: imported or estimated. Only administrators can mark data verified; synthetic data cannot be imported.</li>
@@ -100,11 +100,11 @@ function Importer() {
           {history.data?.length ? (
             <ul className="space-y-2 text-xs">
               {history.data.slice(0, 8).map((h) => (
-                <li key={h.id} className="text-slate-400"><span className="text-slate-200">{h.filename}</span> · {h.kind} · {fmtDateTime(h.created_at)}<br />{Object.entries(h.record_counts).map(([k, v]) => `${k} ${v}`).join(", ")}{h.warnings ? ` · ${h.warnings} warnings` : ""}</li>
+                <li key={h.id} className="text-ink-2"><span className="text-ink">{h.filename}</span> · {h.kind} · {fmtDateTime(h.created_at)}<br />{Object.entries(h.record_counts).map(([k, v]) => `${k} ${v}`).join(", ")}{h.warnings ? ` · ${h.warnings} warnings` : ""}</li>
               ))}
             </ul>
           ) : (
-            <p className="text-sm text-slate-500">None yet.</p>
+            <p className="text-sm text-ink-3">None yet.</p>
           )}
         </Panel>
       </div>

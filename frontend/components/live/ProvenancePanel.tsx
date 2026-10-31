@@ -23,20 +23,20 @@ export default function ProvenancePanel({ ipoId }: { ipoId: number }) {
         <div className="relative overflow-x-auto">
           <table className="w-full min-w-[640px] text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+              <tr className="text-left text-xs uppercase tracking-wider text-ink-3">
                 <th className="py-2 pr-3">Field</th><th className="py-2 pr-3">Value</th><th className="py-2 pr-3">Status</th>
                 <th className="py-2 pr-3">Source</th><th className="py-2 pr-3">Last verified</th><th className="py-2">Basis</th>
               </tr>
             </thead>
             <tbody>
               {entries.map(([k, f]) => (
-                <tr key={k} className="border-t border-white/5 align-top">
-                  <td className="py-1.5 pr-3 text-slate-300">{titleCase(k)}</td>
-                  <td className="py-1.5 pr-3 tabular-nums text-slate-100">{show(f.value)}</td>
-                  <td className="py-1.5 pr-3"><DataStatusBadge status={f.data_status} compact />{f.conflicts > 0 && <span className="ml-1 text-[11px] text-amber-300">{f.conflicts} conflict{f.conflicts > 1 ? "s" : ""}</span>}</td>
-                  <td className="py-1.5 pr-3 text-xs">{f.source_url ? <a href={f.source_url} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline">{f.source_key}</a> : <span className="text-slate-400">{f.source_key}</span>}</td>
-                  <td className="py-1.5 pr-3 text-xs text-slate-400">{fmtDateTime(f.last_verified_at)}</td>
-                  <td className="py-1.5 text-xs text-slate-500">{f.basis ?? ""}</td>
+                <tr key={k} className="border-t border-line align-top">
+                  <td className="py-1.5 pr-3 text-ink-2">{titleCase(k)}</td>
+                  <td className="py-1.5 pr-3 tabular-nums text-ink">{show(f.value)}</td>
+                  <td className="py-1.5 pr-3"><DataStatusBadge status={f.data_status} compact />{f.conflicts > 0 && <span className="ml-1 text-[11px] text-warn-ink">{f.conflicts} conflict{f.conflicts > 1 ? "s" : ""}</span>}</td>
+                  <td className="py-1.5 pr-3 text-xs">{f.source_url ? <a href={f.source_url} target="_blank" rel="noopener noreferrer" className="text-brand-ink hover:underline">{f.source_key}</a> : <span className="text-ink-2">{f.source_key}</span>}</td>
+                  <td className="py-1.5 pr-3 text-xs text-ink-2">{fmtDateTime(f.last_verified_at)}</td>
+                  <td className="py-1.5 text-xs text-ink-3">{f.basis ?? ""}</td>
                 </tr>
               ))}
             </tbody>

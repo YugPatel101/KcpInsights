@@ -1,6 +1,6 @@
 """Test fixtures. Every test gets a fresh SQLite database built by Alembic migrations.
 
-No test depends on a live external API or a downloaded LLM: AI providers are mocked.
+No test depends on a live external API: network access is mocked and offer documents are generated locally.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ os.environ["KCP_DATABASE_URL"] = f"sqlite:///{_TMP / 'bootstrap.db'}"
 os.environ["KCP_DATA_DIR"] = str(_TMP)
 os.environ["KCP_UPLOAD_DIR"] = str(_TMP / "uploads")
 os.environ["KCP_CACHE_DIR"] = str(_TMP / "cache")
-os.environ["KCP_AI_PROVIDER"] = "deterministic"
 
 from datetime import date  # noqa: E402
 
@@ -28,7 +27,6 @@ from app.config import BACKEND_DIR  # noqa: E402
 from app.core.rate_limit import limiter  # noqa: E402
 from app.db import get_db, make_engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.services.llm_provider import reset_health_cache  # noqa: E402
 
 TODAY = date.today()
 
@@ -50,7 +48,6 @@ def db(tmp_path):
     session = Session()
     app.dependency_overrides[get_db] = lambda: (yield from _yield(Session))
     limiter.reset()
-    reset_health_cache()
     yield session
     session.close()
     app.dependency_overrides.clear()

@@ -1,5 +1,4 @@
 import Link from "next/link";
-import AuroraBackground from "@/components/common/AuroraBackground";
 
 interface AuthLayoutProps {
   title: string;
@@ -14,28 +13,27 @@ export default function AuthLayout({
 }: AuthLayoutProps) {
   return (
     <>
-      <AuroraBackground />
-      <main id="main" className="relative z-10 flex min-h-screen items-center justify-center px-6 py-12">
-        <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl">
+      <main id="main" className="relative z-10 flex min-h-screen items-center justify-center bg-canvas px-4 py-12">
+        <div className="w-full max-w-md rounded-xl border border-line bg-surface p-7">
 
           {/* Logo */}
           <div className="mb-8 text-center">
-            <Link href="/" className="text-3xl font-extrabold tracking-tight text-white">
-              Kcp<span className="text-slate-400">Insights</span>
+            <Link href="/" className="text-2xl font-semibold tracking-tight text-ink">
+              Kcp<span className="text-brand-ink">Insights</span>
             </Link>
 
-            <p className="mt-2 text-sm text-slate-400">
+            <p className="mt-2 text-sm text-ink-2">
               Educational IPO research
             </p>
           </div>
 
           {/* Heading */}
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-white">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
               {title}
             </h1>
 
-            <p className="mt-2 text-slate-400">
+            <p className="mt-2 text-ink-2">
               {subtitle}
             </p>
           </div>

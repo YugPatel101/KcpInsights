@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
@@ -12,11 +13,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app import __version__
-from app.api.routes import auth, data, ipos, live, system, workspace
+from app.api.routes import analytics, auth, data, ipos, live, research, system, workspace
 from app.config import get_settings
 from app.core.errors import install_error_handlers
 
 log = logging.getLogger("kcp")
+
+
+class _JsonFormatter(logging.Formatter):
+    """One JSON object per line (KCP_LOG_FORMAT=json) for log shippers; same redaction as text logs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        out = {"time": self.formatTime(record), "level": record.levelname, "logger": record.name, "message": record.getMessage()}
+        if record.exc_info:
+            out["exception"] = self.formatException(record.exc_info)
+        return json.dumps(out, ensure_ascii=False)
 
 
 class _RedactFilter(logging.Filter):
@@ -34,6 +45,9 @@ class _RedactFilter(logging.Filter):
 def create_app() -> FastAPI:
     s = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if s.log_format == "json":
+        for h in logging.getLogger().handlers:
+            h.setFormatter(_JsonFormatter())
     for name in ("kcp", "uvicorn.access", "uvicorn.error"):
         logging.getLogger(name).addFilter(_RedactFilter())
 
@@ -54,8 +68,8 @@ def create_app() -> FastAPI:
         title="KcpInsights API",
         version=__version__,
         description=(
-            "Educational IPO research platform: transparent quantitative scoring, provenance-tracked data and a "
-            "tool-using research agent. Nothing here is investment advice."
+            "Educational IPO research platform: automated IPO and prospectus data, standard financial ratios and "
+            "transparent quantitative scoring with provenance. Nothing here is investment advice."
         ),
         docs_url="/api/docs",
         redoc_url=None,
@@ -107,7 +121,7 @@ def create_app() -> FastAPI:
         return response
 
     # live.router first: its /api/ipos/upcoming etc. must match before /api/ipos/{ipo_id}
-    for r in (system.router, auth.router, live.router, ipos.router, workspace.router, data.router):
+    for r in (system.router, auth.router, live.router, research.router, analytics.router, ipos.router, workspace.router, data.router):
         app.include_router(r)
     return app
 

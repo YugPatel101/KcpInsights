@@ -3,16 +3,12 @@ import { cn } from "@/lib/utils";
 
 type KcpButtonProps = React.ComponentProps<typeof Button>;
 
-export default function KcpButton({
-  className,
-  children,
-  ...props
-}: KcpButtonProps) {
+export default function KcpButton({ className, children, ...props }: KcpButtonProps) {
   return (
     <Button
       className={cn(
-        "h-12 min-w-40 rounded-xl border border-slate-700 bg-transparent px-8 text-[15px] font-semibold text-white transition-all duration-300 hover:border-white hover:bg-white hover:text-black",
-        className
+        "h-10 rounded-md border border-transparent bg-brand px-5 text-sm font-semibold text-white transition hover:bg-brand/85",
+        className,
       )}
       {...props}
     >

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api, errorMessage, setCsrfToken } from "@/lib/api";
 import { MISSING, fmtCr, fmtMetric, fmtPct, fmtScore, priceBand, riskTone, scoreTone } from "@/lib/format";
-import { compactOverrides, registerSchema, scenarioFormSchema, documentUploadSchema } from "@/lib/schemas";
+import { registerSchema, documentUploadSchema } from "@/lib/schemas";
 
 describe("format", () => {
   it("renders missing values explicitly, never as zero", () => {
@@ -20,9 +20,19 @@ describe("format", () => {
     expect(priceBand(95, 100)).toBe("₹95–100");
   });
   it("assigns tones", () => {
-    expect(scoreTone(80)).toContain("emerald");
-    expect(scoreTone(null)).toContain("slate");
-    expect(riskTone("high")).toContain("rose");
+    expect(scoreTone(80)).toContain("pos");
+    expect(scoreTone(30)).toContain("warn");
+    expect(scoreTone(null)).toContain("ink-3");
+    expect(riskTone("high")).toContain("neg");
+    expect(riskTone("elevated")).toContain("neg");
+    expect(riskTone("low")).toContain("pos");
+    expect(riskTone(null)).toContain("ink-3");
+  });
+  it("formats ratio units without inventing values", () => {
+    expect(fmtMetric(29.854, "%")).toBe("29.85%");
+    expect(fmtMetric(2.7838, "x")).toBe("2.78x");
+    expect(fmtMetric(-0.31, "pp")).toBe("-0.31 pp");
+    expect(fmtMetric(undefined, "x")).toBe(MISSING);
   });
 });
 
@@ -33,11 +43,6 @@ describe("schemas", () => {
     expect(registerSchema.safeParse({ ...base, password: "short1", confirm: "short1" }).success).toBe(false);
     expect(registerSchema.safeParse({ ...base, password: "onlyletterslong", confirm: "onlyletterslong" }).success).toBe(false);
     expect(registerSchema.safeParse({ ...base, confirm: "different1x" }).success).toBe(false);
-  });
-  it("drops blank scenario overrides and validates ranges", () => {
-    const parsed = scenarioFormSchema.parse({ bear: { multiple: "" }, base: { revenue_growth_pct: "12.5" }, bull: {} });
-    expect(compactOverrides(parsed)).toEqual({ base: { revenue_growth_pct: 12.5 } });
-    expect(scenarioFormSchema.safeParse({ bear: { multiple: "-3" }, base: {}, bull: {} }).success).toBe(false);
   });
   it("validates document source URLs", () => {
     expect(documentUploadSchema.safeParse({ title: "RHP", doc_type: "rhp", source_url: "javascript:alert(1)" }).success).toBe(false);
@@ -79,5 +84,15 @@ describe("api client", () => {
     await expect(api("/api/x", { method: "DELETE" })).resolves.toBeUndefined();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Internal Server Error", { status: 500 })));
     await expect(api("/api/x")).rejects.toMatchObject({ code: "backend_unavailable" });
+  });
+});
+
+describe("API timestamps", () => {
+  it("reads a naive API timestamp as UTC (regression: shown 5.5 h off in IST)", async () => {
+    const { parseApiTime } = await import("@/lib/format");
+    expect(parseApiTime("2026-10-31T15:40:17").toISOString()).toBe("2026-10-31T15:40:17.000Z");
+    expect(parseApiTime("2026-10-31T15:40:17.123456").getUTCHours()).toBe(15);
+    expect(parseApiTime("2026-10-31T15:40:17+05:30").toISOString()).toBe("2026-10-31T10:10:17.000Z");
+    expect(parseApiTime("2026-10-31T15:40:17Z").toISOString()).toBe("2026-10-31T15:40:17.000Z");
   });
 });

@@ -82,6 +82,8 @@ class ListingPriceRecord:
     series: str
     isin: str | None
     source_url: str
+    high_price: float | None = None
+    low_price: float | None = None
 
 
 class IPODataSource:

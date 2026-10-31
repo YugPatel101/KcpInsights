@@ -22,25 +22,6 @@ export const registerSchema = z
   .refine((v) => v.password === v.confirm, { path: ["confirm"], message: "Passwords do not match" });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-const optNum = (min: number, max: number) =>
-  z.preprocess(
-    (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
-    z.number({ message: "Must be a number" }).min(min).max(max).optional(),
-  );
-
-export const scenarioOverrideSchema = z.object({
-  revenue_growth_pct: optNum(-90, 300),
-  ebitda_margin_pct: optNum(-100, 100),
-  multiple: optNum(0.01, 500),
-  market_adjustment_pct: optNum(-90, 200),
-});
-export const scenarioFormSchema = z.object({
-  bear: scenarioOverrideSchema,
-  base: scenarioOverrideSchema,
-  bull: scenarioOverrideSchema,
-});
-export type ScenarioForm = z.input<typeof scenarioFormSchema>;
-
 export const documentUploadSchema = z.object({
   title: z.string().trim().min(3, "At least 3 characters").max(300),
   doc_type: z.enum(["drhp", "rhp", "prospectus", "annual_report", "disclosure", "other"]),
@@ -51,13 +32,3 @@ export const documentUploadSchema = z.object({
     .refine((v) => v === "" || /^https?:\/\//.test(v), "Must start with http:// or https://"),
 });
 export type DocumentUpload = z.infer<typeof documentUploadSchema>;
-
-/** Strip empty overrides before sending to the API. */
-export function compactOverrides(form: z.output<typeof scenarioFormSchema>) {
-  const out: Record<string, Record<string, number>> = {};
-  for (const [name, o] of Object.entries(form)) {
-    const kept = Object.fromEntries(Object.entries(o).filter(([, v]) => typeof v === "number")) as Record<string, number>;
-    if (Object.keys(kept).length) out[name] = kept;
-  }
-  return out;
-}

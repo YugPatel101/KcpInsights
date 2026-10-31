@@ -12,9 +12,9 @@ export default function IpoPicker({ value, onChange, label = "IPO", exclude = []
   exclude?: number[];
   allowEmpty?: boolean;
 }) {
-  const { data } = useApi<Paged<IpoSummary>>("/api/ipos?page_size=100&sort=name");
+  const { data } = useApi<Paged<IpoSummary>>("/api/ipos?page_size=200&sort=name");
   return (
-    <label className="block text-xs text-slate-400">
+    <label className="block text-xs text-ink-2">
       <span className="mb-1 block">{label}</span>
       <select className={inputClass} value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
         <option value="">{allowEmpty ? "None" : "Select an IPO…"}</option>

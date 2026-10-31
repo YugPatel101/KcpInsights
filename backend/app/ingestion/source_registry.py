@@ -24,12 +24,20 @@ SOURCES: list[SourceSpec] = [
                "Upcoming/open/past issues, issue details, consolidated subscription. Public JSON used by NSE's own pages; robots.txt allows."),
     SourceSpec("nse_bhavcopy", "NSE daily bhavcopy (archives)", "https://nsearchives.nseindia.com/content/cm/", "official", "automatic",
                "Listing-day open and close prices from the official end-of-day file."),
+    SourceSpec("nse_rhp", "Offer documents (RHP) in NSE archives", "https://nsearchives.nseindia.com/content/ipo/", "official", "automatic",
+               "Red Herring Prospectus archives linked from each NSE issue page. Restated balance sheet, P&L, cash flow, listed peers and "
+               "key disclosures are extracted from the PDF text layer and reconciled; scanned (image-only) pages cannot be read."),
     SourceSpec("bse_ipo", "BSE public issues", "https://www.bseindia.com/markets/PublicIssues/IPOIssues_new.aspx", "official", "manual_only",
                "Automated requests are refused (Access Denied). Use manual CSV/JSON import for BSE-only issues."),
-    SourceSpec("sebi_offer_documents", "SEBI offer documents", "https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=3&ssid=15&smid=11",
-               "official", "manual_only", "Download DRHP/RHP PDFs and upload them on the IPO page (or fetch one URL as admin)."),
+    SourceSpec("sebi_offer_documents", "SEBI offer documents (DRHP / RHP filings)",
+               "https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=3&ssid=15&smid=11", "official", "automatic",
+               "First page of the draft (DRHP) and red herring (RHP) filing lists, polled twice a day; robots.txt allows. New companies "
+               "become pipeline issues; a SEBI RHP is read only when the NSE copy could not be. Older pages need a form token and are "
+               "not automated. SME offer documents are filed with the exchange, not SEBI."),
+    SourceSpec("nse_equity_list", "NSE listed-equity lists (archives)", "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv", "official",
+               "automatic", "Symbol and company name of every NSE mainboard and SME equity; used to match listed peers to the daily bhavcopy."),
     SourceSpec("company_ir", "Company investor-relations pages", "", "official", "manual_only",
-               "Financial statements and annual reports must be imported from the offer document or company filings."),
+               "Not crawled automatically (no common structure). Restated financials come from the offer document instead."),
     SourceSpec("user_import", "User-imported research", "", "manual", "manual_only", "CSV/JSON imports with stated provenance."),
 ]
 

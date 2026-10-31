@@ -23,24 +23,24 @@ export default function SearchBar() {
   return (
     <form
       role="search"
-      className="flex min-w-0 flex-1 items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+      className="flex min-w-0 max-w-xl flex-1 items-center justify-between rounded-md border border-line bg-surface px-3 py-1.5"
       onSubmit={(e) => {
         e.preventDefault();
         router.push(`/ipos${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`);
       }}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <Search className="size-4 shrink-0 text-slate-400" aria-hidden />
+        <Search className="size-4 shrink-0 text-ink-3" aria-hidden />
         <input
           ref={ref}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           aria-label="Search IPOs"
           placeholder="Search IPOs, companies, sectors..."
-          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-500"
+          className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
         />
       </div>
-      <kbd className="hidden rounded-md border border-white/10 px-2 py-0.5 text-xs text-slate-500 sm:block">⌘ K</kbd>
+      <kbd className="hidden rounded border border-line px-1.5 py-0.5 text-[11px] text-ink-3 sm:block">⌘ K</kbd>
     </form>
   );
 }

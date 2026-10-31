@@ -24,13 +24,13 @@ export default function KeyDates({ ipoId, dates }: { ipoId: number; dates: KeyDa
         {dates.map((d) => {
           const ch = rows.filter((c) => c.field === DATE_FIELD[d.key]);
           return (
-            <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 py-1.5 text-sm">
-              <span className="text-slate-300">{d.label}</span>
+            <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-1.5 text-sm">
+              <span className="text-ink-2">{d.label}</span>
               <span className="flex items-center gap-2">
-                <span className="tabular-nums text-slate-100">{fmtDate(d.date)}</span>
+                <span className="tabular-nums text-ink">{fmtDate(d.date)}</span>
                 <DataStatusBadge status={d.status} compact />
                 {ch.length > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 px-1.5 py-0.5 text-[11px] text-amber-200"
+                  <span className="inline-flex items-center gap-1 rounded-md border border-warn/30 px-1.5 py-0.5 text-[11px] text-warn-ink"
                     title={ch.map((c) => `${show(c.old_value)} → ${show(c.new_value)} (${fmtDateTime(c.changed_at)})`).join("\n")}>
                     <History className="size-3" aria-hidden /> changed
                   </span>
@@ -41,13 +41,13 @@ export default function KeyDates({ ipoId, dates }: { ipoId: number; dates: KeyDa
         })}
       </ol>
       {rows.length > 0 && (
-        <details className="mt-3 text-xs text-slate-400">
-          <summary className="cursor-pointer text-slate-300">Change history ({rows.length})</summary>
+        <details className="mt-3 text-xs text-ink-2">
+          <summary className="cursor-pointer text-ink-2">Change history ({rows.length})</summary>
           <ul className="mt-2 space-y-1">
             {rows.map((c, i) => (
               <li key={i}>
-                {fmtDateTime(c.changed_at)} · {titleCase(c.field)}: {show(c.old_value)} → <span className="text-slate-200">{show(c.new_value)}</span>{" "}
-                <span className="text-slate-500">({c.source_key})</span>
+                {fmtDateTime(c.changed_at)} · {titleCase(c.field)}: {show(c.old_value)} → <span className="text-ink">{show(c.new_value)}</span>{" "}
+                <span className="text-ink-3">({c.source_key})</span>
               </li>
             ))}
           </ul>

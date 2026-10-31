@@ -215,6 +215,7 @@ class NSEBhavcopySource:
             out[sym] = ListingPriceRecord(
                 symbol=sym, trade_date=td, open_price=op, close_price=nz.parse_number(row.get("ClsPric")),
                 previous_close=nz.parse_number(row.get("PrvsClsgPric")), series=series, isin=row.get("ISIN") or None, source_url=url,
+                high_price=nz.parse_number(row.get("HghPric")), low_price=nz.parse_number(row.get("LwPric")),
             )
         return out
 
@@ -241,3 +242,46 @@ class NSEBhavcopySource:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(text)  # bhavcopies are immutable once published
         return FetchResult.ok(self.parse_csv(text, url), url)
+
+
+class NSEEquityList:
+    """Official lists of NSE-listed equities (mainboard and SME): symbol and company name, used to match listed peers.
+
+    ``content/equities/EQUITY_L.csv`` and ``emerge/corporates/content/SME_EQUITY_L.csv`` on the NSE archive host (verified
+    2026-10-31). Cached for a day.
+    """
+
+    URLS = (f"{ARCHIVE}/content/equities/EQUITY_L.csv", f"{ARCHIVE}/emerge/corporates/content/SME_EQUITY_L.csv")
+
+    def __init__(self, client: PoliteClient) -> None:
+        self.client = client
+
+    @staticmethod
+    def parse(text: str) -> dict[str, str]:
+        """normalised company name -> symbol"""
+        out: dict[str, str] = {}
+        for row in csv.DictReader(io.StringIO(text)):
+            row = {k.strip().upper(): (v or "").strip() for k, v in row.items() if k}
+            sym, name = row.get("SYMBOL"), row.get("NAME OF COMPANY") or row.get("NAME_OF_COMPANY")
+            if sym and name:
+                out.setdefault(nz.normalize_company_name(name), sym)
+        return out
+
+    def fetch(self, today: date) -> FetchResult[dict[str, str]]:
+        s = get_settings()
+        merged: dict[str, str] = {}
+        for url in self.URLS:
+            cache = s.cache_dir / "equity_list" / f"{today:%Y%m%d}_{url.rsplit('/', 1)[-1]}"
+            if cache.exists():
+                text = cache.read_text()
+            else:
+                try:
+                    body, _ = self.client.get(url, max_bytes=5 * 1024 * 1024)
+                except SourceError as exc:
+                    return FetchResult.unavailable(f"{exc.kind}: {exc}")
+                text = body.decode("utf-8", errors="replace")
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(text)
+            for k, v in self.parse(text).items():
+                merged.setdefault(k, v)
+        return FetchResult.ok(merged, self.URLS[0])

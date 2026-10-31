@@ -79,6 +79,18 @@ class PoliteClient:
         cached = self._cache.get(url)
         if cached and cache_ttl and time.monotonic() - cached.at < cache_ttl:
             return cached.body, cached.content_type
+        body, ctype, _ = self.request(url, max_bytes=max_bytes)
+        if cache_ttl:
+            self._cache[url] = _Cached(time.monotonic(), body, ctype)
+        return body, ctype
+
+    def head(self, url: str) -> dict[str, str]:
+        """Response headers only (ETag, Last-Modified, Content-Length) — used to skip unchanged documents."""
+        _, _, headers = self.request(url, method="HEAD")
+        return headers
+
+    def request(self, url: str, *, method: str = "GET", max_bytes: int = 30 * 1024 * 1024) -> tuple[bytes, str, dict[str, str]]:
+        """One polite request: per-host serialisation and spacing, bounded retries, streamed size limit."""
         host = urlparse(url).hostname or ""
         attempt = 0
         with self._host_lock(host):  # never concurrent requests to the same host
@@ -86,33 +98,36 @@ class PoliteClient:
                 self._wait_turn(host)
                 self.requests_made += 1
                 try:
-                    r = self.client.get(url)
-                except httpx.TimeoutException as exc:
-                    err = SourceError("timeout", f"timed out fetching {url}")
-                    if attempt >= self.max_retries:
-                        raise err from exc
-                except httpx.HTTPError as exc:
-                    err = SourceError("network", f"network error: {type(exc).__name__}")
-                    if attempt >= self.max_retries:
-                        raise err from exc
-                else:
-                    if r.status_code in (401, 403):
-                        raise SourceError("access_denied", f"source refused automated access (HTTP {r.status_code})", r.status_code)
-                    if r.status_code == 429:
-                        raise SourceError("rate_limited", "source rate limit reached (HTTP 429); backing off until the next run", 429)
-                    if r.status_code >= 500:
-                        if attempt >= self.max_retries:
+                    with self.client.stream(method, url) as r:
+                        if r.status_code in (401, 403):
+                            raise SourceError("access_denied", f"source refused automated access (HTTP {r.status_code})", r.status_code)
+                        if r.status_code == 429:
+                            raise SourceError("rate_limited", "source rate limit reached (HTTP 429); backing off until the next run", 429)
+                        if r.status_code >= 500:
+                            if attempt >= self.max_retries:
+                                raise SourceError("http", f"HTTP {r.status_code}", r.status_code)
+                        elif r.status_code >= 400 or r.status_code in (301, 302, 303, 307, 308):
                             raise SourceError("http", f"HTTP {r.status_code}", r.status_code)
-                    elif r.status_code >= 400 or r.status_code in (301, 302, 303, 307, 308):
-                        raise SourceError("http", f"HTTP {r.status_code}", r.status_code)
-                    else:
-                        body = r.content
-                        if len(body) > max_bytes:
-                            raise SourceError("http", f"response larger than {max_bytes} bytes")
-                        ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
-                        if cache_ttl:
-                            self._cache[url] = _Cached(time.monotonic(), body, ctype)
-                        return body, ctype
+                        else:
+                            declared = int(r.headers.get("content-length") or 0)
+                            if method == "GET" and declared > max_bytes:
+                                raise SourceError("http", f"response larger than {max_bytes} bytes ({declared})")
+                            chunks: list[bytes] = []
+                            size = 0
+                            if method == "GET":
+                                for chunk in r.iter_bytes():
+                                    size += len(chunk)
+                                    if size > max_bytes:
+                                        raise SourceError("http", f"response larger than {max_bytes} bytes")
+                                    chunks.append(chunk)
+                            ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                            return b"".join(chunks), ctype, {k.lower(): v for k, v in r.headers.items()}
+                except httpx.TimeoutException as exc:
+                    if attempt >= self.max_retries:
+                        raise SourceError("timeout", f"timed out fetching {url}") from exc
+                except httpx.HTTPError as exc:
+                    if attempt >= self.max_retries:
+                        raise SourceError("network", f"network error: {type(exc).__name__}") from exc
                 attempt += 1
                 self.sleep(self.backoff_base * (2 ** (attempt - 1)))
 

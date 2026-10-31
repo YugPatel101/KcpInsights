@@ -15,7 +15,7 @@ export default function RequireAuth({ children, what }: { children: React.ReactN
       <EmptyState
         title={`Sign in to see your ${what}`}
         body="This content is private to your account."
-        action={<Link href={`/login?next=${encodeURIComponent(pathname)}`} className="text-sky-300 hover:underline">Sign in</Link>}
+        action={<Link href={`/login?next=${encodeURIComponent(pathname)}`} className="text-brand-ink hover:underline">Sign in</Link>}
       />
     );
   }

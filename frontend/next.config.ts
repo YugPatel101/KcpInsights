@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
   // Pin the root: a stray lockfile in a parent directory must not change module resolution.
   turbopack: { root: process.cwd() },
   experimental: {
-    // Local-model agent calls can take longer than the 30 s default proxy timeout.
+    // An administrator's "reprocess document" request (extraction, OCR of scanned pages) can exceed the 30 s default.
     proxyTimeout: 120_000,
   },
   async rewrites() {

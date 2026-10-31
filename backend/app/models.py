@@ -42,6 +42,8 @@ class DataStatus(enum.StrEnum):
     estimated = "estimated"  # analyst estimate / derived assumption
     synthetic = "synthetic"  # demonstration fixture – never a real fact
     secondary_source = "secondary_source"  # non-authoritative public source (discovery / cross-check only)
+    extracted = "extracted"  # read from an official document by the parser; no reconciliation check covers it
+    requires_review = "requires_review"  # read from an official document but an accounting check failed
     unavailable = "unavailable"
 
 
@@ -133,10 +135,44 @@ class SourceDocument(Base):
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     data_status: Mapped[str] = mapped_column(String(16), default=DataStatus.imported.value)
-    embedding_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     injection_flags: Mapped[int] = mapped_column(Integer, default=0)
+    # --- automatic retrieval (official exchange archives) -------------------------------
+    source_key: Mapped[str | None] = mapped_column(String(48), nullable=True)  # e.g. nse_ipo
+    archive_url: Mapped[str | None] = mapped_column(String(1000), nullable=True, index=True)  # URL the file was found at
+    original_filename: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_etag: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    http_last_modified: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    original_retained: Mapped[bool] = mapped_column(Boolean, default=True)  # False once pruned to save disk space
+    # pending | extracted | partial | failed | not_found | skipped
+    extraction_status: Mapped[str] = mapped_column(String(24), default="pending")
+    extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    extraction_method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # text | ocr | text+ocr
+    # retry with exponential backoff; after the configured number of attempts the document is a dead letter
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     chunks: Mapped[list[DocumentChunk]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentExtraction(Base):
+    """One run of the financial-statement extractor over one document (kept as an audit trail)."""
+
+    __tablename__ = "document_extractions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("source_documents.id", ondelete="CASCADE"), index=True)
+    parser_version: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(24))  # extracted | partial | failed | not_found
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pages_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    statements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # page, kind, basis, unit, periods
+    checks: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # accounting reconciliation results
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DocumentChunk(Base):
@@ -146,7 +182,6 @@ class DocumentChunk(Base):
     page: Mapped[int] = mapped_column(Integer)
     chunk_index: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
-    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     injection_suspected: Mapped[bool] = mapped_column(Boolean, default=False)
 
     document: Mapped[SourceDocument] = relationship(back_populates="chunks")
@@ -191,6 +226,10 @@ class Company(Base):
     customer_concentration_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     customer_concentration_basis: Mapped[str | None] = mapped_column(String(80), nullable=True)
     customer_concentration_source_id: Mapped[int | None] = mapped_column(ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
+    # analysis profile chosen by the industry classifier (lender | insurer | technology | manufacturing | ... | general)
+    industry_profile: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # how the sector was determined: {method, status, evidence: [{phrase, count, pages}], document_id, classified_at}
+    classification: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     data_status: Mapped[str] = mapped_column(String(16), default=DataStatus.imported.value)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -234,6 +273,8 @@ class IPOIssue(Base):
     listing_date_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     listing_price_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)  # listing_day_open
     listing_close_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    listing_high_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # listing-day high (bhavcopy HghPric)
+    listing_low_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # listing-day low (bhavcopy LwPric)
     allotment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     refund_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     demat_credit_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -245,6 +286,12 @@ class IPOIssue(Base):
     issue_size_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     risk_disclosures_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # facts read from the offer document: {key: {value, page, text, basis, document_id, read_at}}
+    document_facts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # cached result of services.completeness (recomputed whenever the IPO is re-scored)
+    completeness_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completeness_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    completeness_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     data_mode: Mapped[str] = mapped_column(String(16), default=DataMode.imported.value, index=True)
     data_status: Mapped[str] = mapped_column(String(16), default=DataStatus.imported.value)
     source_record_id: Mapped[int | None] = mapped_column(ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
@@ -338,6 +385,33 @@ class FinancialStatement(Base):
     total_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
     current_assets: Mapped[float | None] = mapped_column(Float, nullable=True)
     current_liabilities: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # --- detailed line items (prospectus extraction; INR crore unless per-share) --------
+    other_income: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_income: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_of_materials: Mapped[float | None] = mapped_column(Float, nullable=True)
+    employee_expenses: Mapped[float | None] = mapped_column(Float, nullable=True)
+    other_expenses: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_expenses: Mapped[float | None] = mapped_column(Float, nullable=True)
+    depreciation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pbt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tax_expense: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_basic: Mapped[float | None] = mapped_column(Float, nullable=True)  # INR per share
+    eps_diluted: Mapped[float | None] = mapped_column(Float, nullable=True)  # INR per share
+    non_current_assets: Mapped[float | None] = mapped_column(Float, nullable=True)
+    non_current_liabilities: Mapped[float | None] = mapped_column(Float, nullable=True)
+    share_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+    other_equity: Mapped[float | None] = mapped_column(Float, nullable=True)  # reserves and surplus
+    borrowings_current: Mapped[float | None] = mapped_column(Float, nullable=True)
+    borrowings_non_current: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lease_liabilities: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trade_receivables: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inventory: Mapped[float | None] = mapped_column(Float, nullable=True)
+    investing_cash_flow: Mapped[float | None] = mapped_column(Float, nullable=True)
+    financing_cash_flow: Mapped[float | None] = mapped_column(Float, nullable=True)
+    basis: Mapped[str] = mapped_column(String(16), default="unknown")  # consolidated | standalone | unknown
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("source_documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    validation_status: Mapped[str] = mapped_column(String(16), default="not_checked")  # passed | failed | partial | not_checked
+    validation: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     data_status: Mapped[str] = mapped_column(String(16))
     source_record_id: Mapped[int | None] = mapped_column(ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -346,6 +420,27 @@ class FinancialStatement(Base):
 
     company: Mapped[Company] = relationship(back_populates="statements")
     source_record: Mapped[SourceRecord | None] = relationship()
+    line_items: Mapped[list[FinancialLineItem]] = relationship(back_populates="statement", cascade="all, delete-orphan")
+
+
+class FinancialLineItem(Base):
+    """Provenance of one extracted figure: where it was read, as printed, and as normalised."""
+
+    __tablename__ = "financial_line_items"
+    __table_args__ = (Index("ix_line_item_statement_field", "statement_id", "field"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    statement_id: Mapped[int] = mapped_column(ForeignKey("financial_statements.id", ondelete="CASCADE"), index=True)
+    field: Mapped[str] = mapped_column(String(48))
+    raw_label: Mapped[str] = mapped_column(String(300))
+    raw_text: Mapped[str] = mapped_column(String(64))  # the figure exactly as printed, e.g. "(218.38)"
+    unit: Mapped[str] = mapped_column(String(24))  # unit stated on the page, e.g. million
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)  # normalised: INR crore (per-share items: INR)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("source_documents.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24))  # extracted | derived
+    validation_status: Mapped[str] = mapped_column(String(16), default="not_checked")
+
+    statement: Mapped[FinancialStatement] = relationship(back_populates="line_items")
 
 
 class PeerSnapshot(Base):
@@ -367,6 +462,22 @@ class PeerSnapshot(Base):
     selection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     data_status: Mapped[str] = mapped_column(String(16))
     source_record_id: Mapped[int | None] = mapped_column(ForeignKey("source_records.id", ondelete="SET NULL"), nullable=True)
+    # --- from the prospectus "comparison with listed industry peers" table ---------------
+    basis: Mapped[str | None] = mapped_column(String(16), nullable=True)  # standalone | consolidated
+    period_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    face_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    closing_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_basic: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_diluted: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nav_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ronw_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("source_documents.id", ondelete="SET NULL"), nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    check_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # latest official closing price (NSE bhavcopy), matched by name to the NSE equity list
+    nse_symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    latest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latest_price_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     ipo: Mapped[IPOIssue] = relationship(back_populates="peers")
     source_record: Mapped[SourceRecord | None] = relationship()
@@ -411,59 +522,19 @@ class ResearchScore(Base):
     ipo_id: Mapped[int] = mapped_column(ForeignKey("ipo_issues.id", ondelete="CASCADE"), index=True)
     config_version: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(24))  # complete | incomplete
-    composite: Mapped[float | None] = mapped_column(Float, nullable=True)
-    quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    composite: Mapped[float | None] = mapped_column(Float, nullable=True)  # overall fundamental score Q
+    profitability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    growth: Mapped[float | None] = mapped_column(Float, nullable=True)
+    financial_health: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cash_flow: Mapped[float | None] = mapped_column(Float, nullable=True)
     valuation: Mapped[float | None] = mapped_column(Float, nullable=True)
-    risk: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk: Mapped[float | None] = mapped_column(Float, nullable=True)  # higher = more risk
+    risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(64), nullable=True)
     coverage: Mapped[float] = mapped_column(Float)
     input_fingerprint: Mapped[str] = mapped_column(String(64))
     breakdown: Mapped[dict[str, Any]] = mapped_column(JSON)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
-
-
-# ---------------------------------------------------------------------------
-# Listing-outcome models
-# ---------------------------------------------------------------------------
-class PredictionModelVersion(Base):
-    __tablename__ = "prediction_model_versions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(64))
-    version: Mapped[str] = mapped_column(String(32))
-    model_type: Mapped[str] = mapped_column(String(48))
-    dataset_kind: Mapped[str] = mapped_column(String(16))  # real | synthetic
-    status: Mapped[str] = mapped_column(String(24))  # evaluated | insufficient_data | pipeline_test_only
-    features: Mapped[list[str]] = mapped_column(JSON)
-    target_definition: Mapped[str] = mapped_column(Text)
-    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    training_window: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    n_samples: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-    evaluations: Mapped[list[ModelEvaluation]] = relationship(back_populates="model_version", cascade="all, delete-orphan")
-
-
-class ModelEvaluation(Base):
-    __tablename__ = "model_evaluations"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    model_version_id: Mapped[int] = mapped_column(ForeignKey("prediction_model_versions.id", ondelete="CASCADE"), index=True)
-    split: Mapped[str] = mapped_column(String(32))  # test | walk_forward
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
-    n_samples: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-    model_version: Mapped[PredictionModelVersion] = relationship(back_populates="evaluations")
-
-
-class Prediction(Base):
-    __tablename__ = "predictions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    ipo_id: Mapped[int] = mapped_column(ForeignKey("ipo_issues.id", ondelete="CASCADE"), index=True)
-    model_version_id: Mapped[int] = mapped_column(ForeignKey("prediction_model_versions.id", ondelete="CASCADE"))
-    prediction_timestamp: Mapped[datetime] = mapped_column(DateTime)
-    feature_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
-    output: Mapped[dict[str, Any]] = mapped_column(JSON)
-    outcome: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -491,45 +562,6 @@ class ResearchReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
-class AgentConversation(Base):
-    __tablename__ = "agent_conversations"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(200))
-    ipo_id: Mapped[int | None] = mapped_column(ForeignKey("ipo_issues.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
-
-    messages: Mapped[list[AgentMessage]] = relationship(
-        back_populates="conversation", cascade="all, delete-orphan", order_by="AgentMessage.id"
-    )
-
-
-class AgentMessage(Base):
-    __tablename__ = "agent_messages"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    conversation_id: Mapped[int] = mapped_column(ForeignKey("agent_conversations.id", ondelete="CASCADE"), index=True)
-    role: Mapped[str] = mapped_column(String(16))  # user | assistant
-    content: Mapped[str] = mapped_column(Text)
-    meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-    conversation: Mapped[AgentConversation] = relationship(back_populates="messages")
-
-
-class ToolCallAudit(Base):
-    __tablename__ = "tool_call_audits"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=True, index=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    tool_name: Mapped[str] = mapped_column(String(64))
-    arguments: Mapped[dict[str, Any]] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(16))  # ok | error | rejected
-    result_summary: Mapped[str] = mapped_column(Text)
-    duration_ms: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
 # ---------------------------------------------------------------------------
 # Live ingestion: sources, jobs, locks, field-level provenance and change history
 # ---------------------------------------------------------------------------
@@ -555,7 +587,7 @@ class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
     job_type: Mapped[str] = mapped_column(String(48), index=True)
-    trigger: Mapped[str] = mapped_column(String(24))  # schedule | admin | startup | agent | cli
+    trigger: Mapped[str] = mapped_column(String(24))  # schedule | admin | startup | cli
     status: Mapped[str] = mapped_column(String(16))  # running | success | partial | failed | skipped
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

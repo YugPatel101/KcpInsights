@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext, audit, require_admin
 from app.config import get_settings
-from app.core.errors import not_found
+from app.core.errors import ApiError, not_found
 from app.db import get_db
 from app.ingestion import data_quality_service as dq
 from app.ingestion.ingestion_scheduler import JOB_TYPES, run_in_background, scheduler_status
@@ -24,12 +24,12 @@ from app.ingestion.ipo_data_service import field_provenance, recent_changes
 from app.ingestion.source_registry import ensure_sources
 from app.models import IngestionJob
 from app.services.ipo_service import (
+    EMPTY_SUMMARY,
     all_ipos,
+    cached_score_summaries,
     effective_status,
     get_ipo,
     include_demo_default,
-    score_ipo,
-    score_summary,
     serialize_ipo_summary,
 )
 
@@ -39,12 +39,13 @@ router = APIRouter(prefix="/api", tags=["live data"])
 def _rows(db: Session, include_demo: bool | None) -> list[dict[str, Any]]:
     inc = include_demo_default(db) if include_demo is None else include_demo
     today = date.today()
+    scores = cached_score_summaries(db)
     out = []
     for ipo in all_ipos(db):
         if not inc and ipo.data_mode == "demo":
             continue
         r = serialize_ipo_summary(ipo, today)
-        r["scores"] = score_summary(score_ipo(db, ipo))
+        r["scores"] = scores.get(ipo.id) or EMPTY_SUMMARY
         out.append(r)
     return out
 
@@ -179,7 +180,8 @@ def sync_status(db: Session = Depends(get_db), limit: int = Query(30, ge=1, le=2
     return {
         "scheduler": scheduler_status(),
         "intervals_minutes": {"discover": s.ingest_discovery_minutes, "details": s.ingest_details_minutes, "subscriptions": s.ingest_subscription_minutes,
-                              "listings": s.ingest_listing_minutes, "health": s.ingest_health_minutes, "documents": s.ingest_documents_minutes},
+                              "listings": s.ingest_listing_minutes, "health": s.ingest_health_minutes, "documents": s.ingest_documents_minutes,
+                              "filings": s.ingest_filings_minutes, "peers": s.ingest_peer_prices_minutes},
         "jobs": [{"id": j.id, "job_type": j.job_type, "trigger": j.trigger, "status": j.status, "started_at": j.started_at.isoformat(),
                   "finished_at": j.finished_at.isoformat() if j.finished_at else None, "records_discovered": j.records_discovered,
                   "records_created": j.records_created, "records_updated": j.records_updated, "fields_changed": j.fields_changed,
@@ -190,12 +192,13 @@ def sync_status(db: Session = Depends(get_db), limit: int = Query(30, ge=1, le=2
 
 
 class SyncIn(BaseModel):
-    job: Literal["all", "discover", "details", "subscriptions", "listings", "documents", "health"] = "all"
+    job: Literal["all", "discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "health"] = "all"
 
 
 @router.post("/admin/data-sync", status_code=202)
 def admin_sync(body: SyncIn, request: Request, db: Session = Depends(get_db), ctx: AuthContext = Depends(require_admin)) -> dict[str, Any]:
-    assert body.job in (*JOB_TYPES, "all")
+    if body.job not in (*JOB_TYPES, "all"):
+        raise ApiError(422, "unknown_job", f"job must be one of: all, {', '.join(JOB_TYPES)}")
     run_in_background(body.job, "admin")
     audit(db, request, "data_sync", ctx.user.id, job=body.job)
     return {"accepted": True, "job": body.job, "note": "Running in the background; follow progress in GET /api/data/sync-status."}

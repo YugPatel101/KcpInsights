@@ -3,30 +3,52 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  TrendingUp,
-  Star,
-  Brain,
-  Settings,
+  Activity,
+  BookOpenText,
+  CalendarDays,
   Calculator,
-  GitCompareArrows,
   FileText,
+  GitCompareArrows,
+  History,
+  LayoutDashboard,
+  ListFilter,
+  Settings,
+  Star,
   Upload,
-  Database,
   X,
 } from "lucide-react";
 
-const menu = [
-  { icon: LayoutDashboard, title: "Dashboard", href: "/dashboard" },
-  { icon: TrendingUp, title: "IPOs", href: "/ipos" },
-  { icon: Calculator, title: "Quant analysis", href: "/analysis" },
-  { icon: GitCompareArrows, title: "Compare", href: "/compare" },
-  { icon: Brain, title: "AI Research", href: "/workspace" },
-  { icon: FileText, title: "Reports", href: "/reports" },
-  { icon: Star, title: "Watchlist", href: "/watchlist" },
-  { icon: Upload, title: "Import data", href: "/import" },
-  { icon: Database, title: "Data pipeline", href: "/data" },
-  { icon: Settings, title: "Settings", href: "/settings" },
+const groups = [
+  {
+    label: "Research",
+    items: [
+      { icon: LayoutDashboard, title: "Market overview", href: "/dashboard" },
+      { icon: ListFilter, title: "IPO discovery", href: "/ipos" },
+      { icon: CalendarDays, title: "Listing calendar", href: "/calendar" },
+      { icon: Calculator, title: "Financial analysis", href: "/analysis" },
+      { icon: GitCompareArrows, title: "Compare", href: "/compare" },
+      { icon: History, title: "Listing history", href: "/history" },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [{ icon: BookOpenText, title: "Methodology", href: "/methodology" }],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { icon: Star, title: "Watchlist", href: "/watchlist" },
+      { icon: FileText, title: "Reports", href: "/reports" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { icon: Activity, title: "System health", href: "/data" },
+      { icon: Upload, title: "Import (optional)", href: "/import" },
+      { icon: Settings, title: "Settings", href: "/settings" },
+    ],
+  },
 ];
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -34,49 +56,57 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
   return (
     <>
-      {open && <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={onClose} aria-hidden />}
+      {open && <div className="fixed inset-0 z-40 bg-black/70 lg:hidden" onClick={onClose} aria-hidden />}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-white/10 bg-black/95 px-4 py-6 backdrop-blur-xl transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:bg-black/50 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-line bg-surface px-3 py-5 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
         aria-label="Primary"
       >
-        <div className="mb-10 flex items-start justify-between px-2">
-          <Link href="/" className="block">
-            <h1 className="text-2xl font-bold">
-              Kcp<span className="text-slate-400">Insights</span>
-            </h1>
-            <p className="mt-1 text-xs text-slate-500">IPO research · educational</p>
+        <div className="mb-6 flex items-start justify-between px-2">
+          <Link href="/" className="block" aria-label="KcpInsights home">
+            <span className="text-lg font-semibold tracking-tight text-ink">
+              Kcp<span className="text-brand-ink">Insights</span>
+            </span>
+            <span className="mt-0.5 block text-[11px] text-ink-3">Indian IPO research</span>
           </Link>
-          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:text-white lg:hidden" aria-label="Close navigation">
+          <button onClick={onClose} className="rounded-md p-1 text-ink-3 hover:text-ink lg:hidden" aria-label="Close navigation">
             <X className="size-5" />
           </button>
         </div>
 
-        <nav className="space-y-1">
-          {menu.map((item) => {
-            const Icon = item.icon;
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onClose}
-                aria-current={active ? "page" : undefined}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${
-                  active ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-white/5 hover:text-white"
-                }`}
-              >
-                <Icon size={18} aria-hidden />
-                <span className="font-medium">{item.title}</span>
-              </Link>
-            );
-          })}
+        <nav className="flex-1 space-y-5 overflow-y-auto">
+          {groups.map((g) => (
+            <div key={g.label}>
+              <p className="mb-1 px-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-3">{g.label}</p>
+              <ul className="space-y-0.5">
+                {g.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        onClick={onClose}
+                        aria-current={active ? "page" : undefined}
+                        className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition ${
+                          active ? "bg-surface-3 font-medium text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink"
+                        }`}
+                      >
+                        <Icon size={16} className={active ? "text-brand-ink" : "text-ink-3"} aria-hidden />
+                        {item.title}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
 
-        <div className="mt-auto rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs leading-5 text-slate-500">
-          Educational research only. Scores summarise stored data under a versioned methodology — they are not advice or forecasts.
-        </div>
+        <p className="mt-4 border-t border-line px-2 pt-4 text-[11px] leading-4 text-ink-3">
+          Educational research. Scores summarise stored data under a versioned methodology; they are not advice or forecasts.
+        </p>
       </aside>
     </>
   );

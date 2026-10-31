@@ -8,8 +8,10 @@ from tests.conftest import ipo_id_by_name, register
 def test_migrations_create_schema(db):
     tables = set(inspect(db.get_bind()).get_table_names())
     for t in ("users", "user_sessions", "ipo_issues", "financial_statements", "source_records", "research_scores",
-              "scoring_config_versions", "prediction_model_versions", "agent_conversations", "tool_call_audits", "alembic_version"):
+              "scoring_config_versions", "document_extractions", "financial_line_items", "alembic_version"):
         assert t in tables
+    for t in ("agent_conversations", "tool_call_audits", "prediction_model_versions", "predictions"):  # AI/ML removed
+        assert t not in tables
 
 
 def test_health_and_empty_state(client):
@@ -36,9 +38,15 @@ def test_list_filter_sort_paginate(client, seeded):
     assert len(p2["items"]) == 4 and p2["total"] == 10
     q = client.get("/api/ipos", params={"q": "aravalli"}).json()
     assert q["total"] == 1
-    assert client.get("/api/ipos", params={"min_quality": 101}).status_code == 422
+    assert client.get("/api/ipos", params={"min_score": 101}).status_code == 422
     hi = client.get("/api/ipos", params={"risk_level": "low"}).json()
     assert all(i["scores"]["risk_level"] == "low" for i in hi["items"])
+    strong = client.get("/api/ipos", params={"min_score": 80, "page_size": 100}).json()["items"]
+    assert strong and all(i["scores"]["composite"] >= 80 for i in strong)
+    stages = client.get("/api/ipos", params={"stage": "awaiting_listing", "page_size": 100}).json()["items"]
+    assert all(i["stage"] == "awaiting_listing" for i in stages)
+    window = client.get("/api/ipos", params={"opening_from": "2000-01-01", "opening_to": "2000-01-31"}).json()
+    assert window["total"] == 0
 
 
 def test_detail_financials_scores_sources(client, seeded):
@@ -46,9 +54,11 @@ def test_detail_financials_scores_sources(client, seeded):
     d = client.get(f"/api/ipos/{iid}").json()
     assert d["company_name"].startswith("Aravalli") and d["documents"] and d["can_edit"] is False
     f = client.get(f"/api/ipos/{iid}/financials").json()
-    assert len(f["statements"]) == 3 and f["unit"] == "crore"
+    assert len(f["statements"]) == 3 and f["unit"] == "crore" and len(f["ratio_history"]) == 3
+    assert f["metrics"]["roe"]["status"] == "ok" and f["formulas"]["roe"].startswith("ROE")
     s = client.get(f"/api/ipos/{iid}/scores").json()
-    assert s["status"] == "complete" and s["config_version"] == "1.0.0" and s["coverage"] == 0.0
+    assert s["status"] == "complete" and s["config_version"] == "2.1.0" and s["coverage"] == 100.0
+    assert s["classification"] and set(s["components"]) == {"profitability", "growth", "financial_health", "cash_flow", "valuation"}
     assert any("SYNTHETIC" in w for w in s["warnings"])
     src = client.get(f"/api/ipos/{iid}/sources").json()["sources"]
     assert src and src[0]["data_status"] == "synthetic"
@@ -62,25 +72,20 @@ def test_detail_financials_scores_sources(client, seeded):
 def test_incomplete_analysis_is_explicit(client, seeded):
     iid = ipo_id_by_name(client, "Konkan")
     s = client.get(f"/api/ipos/{iid}/scores").json()
-    assert s["status"] == "incomplete" and s["composite"] is None
-    assert {m["component"] for m in s["missing_components"]} == {"quality", "valuation", "risk"}
+    assert s["status"] == "insufficient" and s["composite"] is None and s["classification"] is None
+    assert "Growth" in s["fundamental"]["reason"] and any(m.startswith("Growth") for m in s["missing"])
 
 
-def test_compare_and_scenario(client, seeded):
+def test_compare_and_valuation_sensitivity(client, seeded):
     a, b = ipo_id_by_name(client, "Aravalli"), ipo_id_by_name(client, "Kaveri")
     c = client.post("/api/ipos/compare", json={"ipo_ids": [a, b]}).json()
     assert len(c["items"]) == 2
     assert client.post("/api/ipos/compare", json={"ipo_ids": [a]}).status_code == 422
     assert client.post("/api/ipos/compare", json={"ipo_ids": [a, a]}).status_code == 422
-    sc = client.post(f"/api/ipos/{a}/scenario", json={"overrides": {"bull": {"multiple": 40}}}).json()
-    assert sc["status"] == "ok" and {s["name"] for s in sc["scenarios"]} == {"bear", "base", "bull"}
-    assert client.post(f"/api/ipos/{a}/scenario", json={"overrides": {"bull": {"multiple": -1}}}).status_code == 422
-
-
-def test_prediction_unavailable_without_real_data(client, seeded):
-    iid = ipo_id_by_name(client, "Godavari")
-    p = client.get(f"/api/ipos/{iid}/prediction").json()
-    assert p["available"] is False and "0 real listed IPOs" in p["reason"]
+    assert set(c["items"][0]["components"]) == {"profitability", "growth", "financial_health", "cash_flow", "valuation"}
+    sens = client.get(f"/api/ipos/{a}/valuation-sensitivity").json()["rows"]
+    assert [r["label"] for r in sens][:2] == ["lower end of band", "upper end of band"]
+    assert sens[0]["pe"] < sens[1]["pe"]  # a lower price means a lower multiple
 
 
 def test_auth_register_login_logout(client, db):
@@ -110,9 +115,7 @@ def test_login_rate_limit(client, db):
 def test_authorization_boundaries(client, seeded):
     iid = ipo_id_by_name(client, "Aravalli")
     csrf = register(client, "owner@example.com")
-    rep = client.post("/api/reports/generate", json={"ipo_id": iid, "use_ai": False}, headers={"X-CSRF-Token": csrf}).json()
-    chat = client.post("/api/agent/chat", json={"message": "Explain the score", "ipo_id": iid}, headers={"X-CSRF-Token": csrf}).json()
-    assert chat["saved"] and chat["conversation_id"]
+    rep = client.post("/api/reports/generate", json={"ipo_id": iid}, headers={"X-CSRF-Token": csrf}).json()
     assert client.post(f"/api/ipos/{iid}/watch", headers={"X-CSRF-Token": csrf}).status_code == 201
     # demo IPOs can only be edited by administrators
     assert client.patch(f"/api/ipos/{iid}", json={"research_notes": "x"}, headers={"X-CSRF-Token": csrf}).status_code == 403
@@ -120,12 +123,9 @@ def test_authorization_boundaries(client, seeded):
     csrf2 = register(client, "intruder@example.com")
     assert client.get(f"/api/reports/{rep['id']}").status_code == 404
     assert client.delete(f"/api/reports/{rep['id']}", headers={"X-CSRF-Token": csrf2}).status_code == 404
-    assert client.get(f"/api/agent/conversations/{chat['conversation_id']}").status_code == 404
-    r = client.post("/api/agent/chat", json={"message": "continue", "conversation_id": chat["conversation_id"]}, headers={"X-CSRF-Token": csrf2})
-    assert r.status_code == 404
     assert client.get("/api/reports").json()["total"] == 0
     assert client.get("/api/watchlist").json() == []
-    assert client.post("/api/models/train", json={"synthetic": True}, headers={"X-CSRF-Token": csrf2}).status_code == 403
+    assert client.post("/api/admin/data-sync", json={"job": "health"}, headers={"X-CSRF-Token": csrf2}).status_code == 403
     assert client.post("/api/sources/fetch", json={"url": "https://www.sebi.gov.in/x.pdf", "title": "x"}, headers={"X-CSRF-Token": csrf2}).status_code == 403
 
 
@@ -146,15 +146,14 @@ def test_watchlist_and_reports_flow(client, seeded):
     iid = ipo_id_by_name(client, "Nilgiri")
     client.post(f"/api/ipos/{iid}/watch", headers={"X-CSRF-Token": csrf})
     wl = client.get("/api/watchlist").json()
-    assert [w["id"] for w in wl] == [iid] and wl[0]["scores"]["config_version"] == "1.0.0"
+    assert [w["id"] for w in wl] == [iid] and wl[0]["scores"]["config_version"] == "2.1.0"
     assert client.get(f"/api/ipos/{iid}").json()["watchlisted"] is True
     client.delete(f"/api/ipos/{iid}/watch", headers={"X-CSRF-Token": csrf})
     assert client.get("/api/watchlist").json() == []
-    rep = client.post("/api/reports/generate", json={"ipo_id": iid, "use_ai": False}, headers={"X-CSRF-Token": csrf}).json()
-    assert rep["generator"] == "deterministic" and len(rep["sections"]) == 12
+    rep = client.post("/api/reports/generate", json={"ipo_id": iid, }, headers={"X-CSRF-Token": csrf}).json()
     keys = [s["key"] for s in rep["sections"]]
-    assert keys == ["executive_summary", "overview", "financial_facts", "quality", "valuation", "risk", "scenarios", "peers",
-                    "missing", "sources", "methodology", "limitations"]
+    assert rep["generator"] == "deterministic" and keys == ["executive_summary", "issue", "financials", "profitability", "growth", "financial_health",
+                                                             "cash_flow", "valuation", "risk", "score", "missing", "limitations"]
     assert all(len(s["evidence"]) == len(set(s["evidence"])) for s in rep["sections"])  # no duplicate citations
     cited = {e for s in rep["sections"] for e in s["evidence"]}
     assert cited <= {c["id"] for c in rep["citations"]}  # every section reference resolves

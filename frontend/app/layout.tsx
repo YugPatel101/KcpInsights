@@ -7,7 +7,7 @@ import { AuthProvider } from "@/lib/auth";
 
 export const metadata: Metadata = {
   title: { default: "KcpInsights", template: "%s · KcpInsights" },
-  description: "Educational IPO research platform with transparent quantitative scoring and an evidence-citing research agent.",
+  description: "Educational IPO research platform: automated IPO data, prospectus financials and transparent quantitative scoring.",
 };
 
 export default function RootLayout({
@@ -17,8 +17,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}>
-      <body className="relative min-h-screen overflow-x-hidden bg-black text-white">
-        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-black">
+      <body className="relative min-h-screen overflow-x-hidden bg-canvas text-ink">
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-brand focus:px-3 focus:py-2 focus:text-ink">
           Skip to content
         </a>
         <AuthProvider>{children}</AuthProvider>

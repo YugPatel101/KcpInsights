@@ -18,7 +18,7 @@ export default function LiveDataBar() {
   const [busy, setBusy] = useState(false);
   if (error) {
     return (
-      <div className="mb-6 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/5 px-4 py-2.5 text-sm text-rose-200" role="status">
+      <div className="mb-6 flex items-center gap-2 rounded-xl border border-neg/30 bg-neg/5 px-4 py-2.5 text-sm text-neg-ink" role="status">
         <WifiOff className="size-4" aria-hidden /> Data status unavailable: {error}
       </div>
     );
@@ -28,20 +28,20 @@ export default function LiveDataBar() {
   const healthy = nse?.health_status === "healthy" && !nse.is_stale;
   const stale = data.stale_records.length;
   return (
-    <div className={`mb-6 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-4 py-2.5 text-sm ${healthy ? "border-emerald-500/20 bg-emerald-500/[0.04]" : "border-amber-500/30 bg-amber-500/[0.06]"}`} role="status">
-      <span className="flex items-center gap-2 text-slate-200">
-        {healthy ? <Wifi className="size-4 text-emerald-400" aria-hidden /> : <AlertTriangle className="size-4 text-amber-400" aria-hidden />}
+    <div className={`mb-6 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-2.5 text-sm ${healthy ? "border-pos/20 bg-pos/[0.04]" : "border-warn/30 bg-warn/[0.06]"}`} role="status">
+      <span className="flex items-center gap-2 text-ink">
+        {healthy ? <Wifi className="size-4 text-pos-ink" aria-hidden /> : <AlertTriangle className="size-4 text-warn-ink" aria-hidden />}
         {data.last_successful_sync_at ? (
-          <>Live data from NSE · last successful sync <strong className="font-medium">{timeAgo(data.last_successful_sync_at)}</strong></>
+          <>Data from NSE public sources · last successful sync <strong className="font-medium">{timeAgo(data.last_successful_sync_at)}</strong></>
         ) : (
-          <>No live sync has completed yet</>
+          <>No data sync has completed yet</>
         )}
       </span>
-      {nse && !healthy && <span className="text-amber-200">NSE source: {nse.health_status}{nse.is_stale ? " (stale)" : ""}{nse.last_error ? ` — ${nse.last_error.slice(0, 90)}` : ""}</span>}
-      {stale > 0 && <span className="text-amber-200">{stale} record{stale === 1 ? "" : "s"} stale — showing last known values</span>}
-      <span className="text-slate-500">{data.scheduler.running ? "auto-refresh on" : "auto-refresh off in this process"}</span>
+      {nse && !healthy && <span className="text-warn-ink">NSE source: {nse.health_status}{nse.is_stale ? " (stale)" : ""}{nse.last_error ? ` — ${nse.last_error.slice(0, 90)}` : ""}</span>}
+      {stale > 0 && <span className="text-warn-ink">{stale} record{stale === 1 ? "" : "s"} stale — showing last known values</span>}
+      <span className="text-ink-3">{data.scheduler.running ? "auto-refresh on" : "auto-refresh off in this process"}</span>
       <span className="ml-auto flex items-center gap-2">
-        {msg && <span className="text-xs text-slate-400">{msg}</span>}
+        {msg && <span className="text-xs text-ink-2">{msg}</span>}
         {user?.is_admin && (
           <button
             className={buttonClass.ghost}
@@ -62,7 +62,7 @@ export default function LiveDataBar() {
             {busy ? <Spinner /> : <RefreshCw className="size-3.5" aria-hidden />} Sync now
           </button>
         )}
-        <Link href="/data" className="text-xs text-sky-300 hover:underline">Data pipeline</Link>
+        <Link href="/data" className="text-xs text-brand-ink hover:underline">System health</Link>
       </span>
     </div>
   );

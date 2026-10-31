@@ -23,7 +23,7 @@ export default function SubscriptionTable({ ipoId, live }: { ipoId: number; live
       {rows.length ? (
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+            <tr className="text-left text-xs uppercase tracking-wider text-ink-3">
               <th className="py-2">Category</th>
               <th className="py-2 text-right">Times subscribed</th>
               <th className="hidden py-2 text-right 2xl:table-cell">Shares offered</th>
@@ -32,11 +32,11 @@ export default function SubscriptionTable({ ipoId, live }: { ipoId: number; live
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.category} className={`border-t border-white/5 ${r.category === "total" ? "font-semibold" : ""}`}>
-                <td className="py-1.5 text-slate-300">{LABEL[r.category] ?? r.category}</td>
-                <td className="py-1.5 text-right tabular-nums text-slate-100">{fmtNum(r.times_subscribed, 2)}x</td>
-                <td className="hidden py-1.5 text-right tabular-nums text-slate-400 2xl:table-cell">{fmtInt(r.shares_offered)}</td>
-                <td className="hidden py-1.5 text-right tabular-nums text-slate-400 2xl:table-cell">{fmtInt(r.shares_bid)}</td>
+              <tr key={r.category} className={`border-t border-line ${r.category === "total" ? "font-semibold" : ""}`}>
+                <td className="py-1.5 text-ink-2">{LABEL[r.category] ?? r.category}</td>
+                <td className="py-1.5 text-right tabular-nums text-ink">{fmtNum(r.times_subscribed, 2)}x</td>
+                <td className="hidden py-1.5 text-right tabular-nums text-ink-2 2xl:table-cell">{fmtInt(r.shares_offered)}</td>
+                <td className="hidden py-1.5 text-right tabular-nums text-ink-2 2xl:table-cell">{fmtInt(r.shares_bid)}</td>
               </tr>
             ))}
           </tbody>
@@ -45,7 +45,7 @@ export default function SubscriptionTable({ ipoId, live }: { ipoId: number; live
         <EmptyState title="No subscription figures published yet" body="Figures appear once the exchange publishes them for this issue; nothing is estimated." />
       )}
       {rows[0] && (
-        <p className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+        <p className="mt-3 flex items-center gap-2 text-xs text-ink-3">
           <DataStatusBadge status={rows[0].data_status} compact />
           {data.source_url ? <a className="hover:underline" href={data.source_url} target="_blank" rel="noopener noreferrer">NSE issue page</a> : "stored data"}
           {live && " · auto-updates every minute from the database"}

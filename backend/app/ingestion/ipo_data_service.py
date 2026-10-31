@@ -307,14 +307,19 @@ def apply_listing_price(db: Session, ipo: IPOIssue, lp: ListingPriceRecord, *, n
         return stats
     src = SourceRecord(source_type="official_url", title=f"NSE bhavcopy {lp.trade_date:%d-%b-%Y} ({lp.symbol})", source_url=lp.source_url,
                        data_status="verified", currency="INR", reporting_period=lp.trade_date.isoformat(),
-                       raw_payload={"symbol": lp.symbol, "open": lp.open_price, "close": lp.close_price, "prev_close": lp.previous_close, "series": lp.series},
-                       notes="nse_bhavcopy: listing-day open (OpnPric) and close (ClsPric)")
+                       raw_payload={"symbol": lp.symbol, "open": lp.open_price, "high": lp.high_price, "low": lp.low_price, "close": lp.close_price,
+                                    "prev_close": lp.previous_close, "series": lp.series},
+                       notes="nse_bhavcopy: listing-day open (OpnPric), high (HghPric), low (LwPric) and close (ClsPric)")
     db.add(src)
     db.flush()
     basis = "listing-day opening price (NSE bhavcopy OpnPric)"
     set_field(db, ipo, "listing_price", lp.open_price, source_key="nse_bhavcopy", source_url=lp.source_url, status="verified", basis=basis, now=now, stats=stats)
     set_field(db, ipo, "listing_close_price", lp.close_price, source_key="nse_bhavcopy", source_url=lp.source_url, status="verified",
               basis="listing-day closing price (NSE bhavcopy ClsPric)", now=now, stats=stats)
+    set_field(db, ipo, "listing_high_price", lp.high_price, source_key="nse_bhavcopy", source_url=lp.source_url, status="verified",
+              basis="listing-day high (NSE bhavcopy HghPric)", now=now, stats=stats)
+    set_field(db, ipo, "listing_low_price", lp.low_price, source_key="nse_bhavcopy", source_url=lp.source_url, status="verified",
+              basis="listing-day low (NSE bhavcopy LwPric)", now=now, stats=stats)
     ipo.listing_price_basis = "listing_day_open"
     ipo.listing_data_status = "verified"
     if stats.fields_changed:

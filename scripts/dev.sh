@@ -2,7 +2,7 @@
 # KcpInsights local launcher (macOS / Linux).
 # Starts the FastAPI backend (127.0.0.1:8000) and the Next.js frontend (localhost:3000).
 # First run: creates backend/.venv, installs dependencies, migrates the SQLite database
-# and loads the synthetic demo fixture. No API keys or AI model are required.
+# and loads the synthetic demo fixture. No API keys, paid services or AI models are required.
 #
 #   scripts/dev.sh            start everything
 #   KCP_SKIP_DEMO=1 scripts/dev.sh   do not load the synthetic demo on an empty database
@@ -96,13 +96,7 @@ for i in $(seq 1 40); do
   [[ $i == 40 ]] && fail "Backend did not become healthy on port $API_PORT."
 done
 green "API healthy  → http://127.0.0.1:$API_PORT/api/docs"
-info "Live NSE sync runs in the API process (first run ~15 s after start; see http://localhost:$WEB_PORT/data)"
-
-if curl -fsS -m 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
-  green "Ollama detected — the research agent will use it if the configured model is downloaded."
-else
-  info "Ollama not running — the research agent uses the deterministic engine (see README to enable local AI)."
-fi
+info "The scheduler runs in the API process: NSE sync ~15 s after start, offer documents ~5 min after start (see http://localhost:$WEB_PORT/data)"
 
 info "Starting web app on http://localhost:$WEB_PORT"
 (cd "$FRONTEND" && KCP_API_URL="http://127.0.0.1:$API_PORT" exec npx next dev --port "$WEB_PORT") &
