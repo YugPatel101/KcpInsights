@@ -24,7 +24,14 @@ from datetime import date
 from app.config import get_settings
 from app.ingestion import normalizer as nz
 from app.ingestion.http import PoliteClient, SourceError
-from app.ingestion.sources.base import FetchResult, IPODataSource, IssueRecord, ListingPriceRecord, SubscriptionRecord
+from app.ingestion.sources.base import (
+    FetchResult,
+    IPODataSource,
+    IssueRecord,
+    ListingPriceRecord,
+    ShareholdingRecord,
+    SubscriptionRecord,
+)
 
 BASE = "https://www.nseindia.com"
 LIST_PAGE = f"{BASE}/market-data/all-upcoming-issues-ipo"
@@ -123,13 +130,14 @@ class NSEOfficialSource(IPODataSource):
                 continue
             cat = nz.subscription_category(str(r.get("category") or ""), r.get("srNo"))
             times = nz.parse_number(r.get("noOfTotalMeant") if "noOfTotalMeant" in r else r.get("noOfTime"))
+            offered = nz.parse_number(r.get("noOfShareOffered") or r.get("noOfSharesOffered"))
+            bid = nz.parse_number(r.get("noOfSharesBid") or r.get("noOfsharesBid"))
             if cat is None or times is None:
                 continue
-            out.append(SubscriptionRecord(
-                category=cat, times_subscribed=times, as_of=as_of, basis=basis,
-                shares_offered=nz.parse_number(r.get("noOfShareOffered") or r.get("noOfSharesOffered")),
-                shares_bid=nz.parse_number(r.get("noOfSharesBid") or r.get("noOfsharesBid")),
-            ))
+            if times == 0 and not offered:
+                # no shares stated as offered (multiple not published, or no such portion): not "0x subscribed"
+                continue
+            out.append(SubscriptionRecord(category=cat, times_subscribed=times, as_of=as_of, basis=basis, shares_offered=offered, shares_bid=bid))
         return out
 
     def fetch_ipo_details(self, symbol: str, series: str) -> FetchResult[tuple[IssueRecord, list[SubscriptionRecord]]]:
@@ -141,6 +149,12 @@ class NSEOfficialSource(IPODataSource):
         if not isinstance(d, dict):
             return FetchResult.unavailable("parse: expected a JSON object")
         info = {str(r.get("title") or "").strip(): r.get("value") for r in (d.get("issueInfo") or {}).get("dataList", []) if isinstance(r, dict)}
+        lower = {k.lower(): v for k, v in info.items()}
+
+        def pick(*titles: str) -> object:
+            # the same field carries different titles on mainboard and SME pages ("Bid Lot" vs "Lot Size")
+            return next((lower[t.lower()] for t in titles if lower.get(t.lower()) not in (None, "", "-", "NA")), None)
+
         meta = d.get("metaInfo") or {}
         itype = nz.issue_type_for_series(series) or "mainboard"
         name = meta.get("companyName") or next((t for t, v in info.items() if t and v == ""), None) or symbol
@@ -152,14 +166,17 @@ class NSEOfficialSource(IPODataSource):
         if " to " in period:
             a, b = period.split(" to ", 1)
             rec.open_date, rec.close_date = nz.parse_date(a), nz.parse_date(b)
-        rec.price_band_low, rec.price_band_high = nz.parse_price_band(info.get("Price Range"))
-        rec.face_value = nz.parse_rupees_per_share(info.get("Face Value"))
-        rec.lot_size = nz.parse_first_int(info.get("Bid Lot"))
-        rec.registrar = nz.strip_html(info.get("Name of the Registrar"))
-        rec.lead_managers = nz.strip_html(info.get("Book Running Lead Managers"))
-        rec.offer_document_url = nz.first_url(info.get("Red Herring Prospectus") or info.get("Prospectus"))
-        rec.basis_of_price_url = nz.first_url(info.get("Ratios / Basis of Issue Price"))
-        rec.issue_size_text = nz.strip_html(info.get("Issue Size"))
+        rec.price_band_low, rec.price_band_high = nz.parse_price_band(pick("Price Range", "Price Band", "Issue Price"))
+        rec.face_value = nz.parse_rupees_per_share(pick("Face Value"))
+        rec.lot_size = nz.parse_first_int(pick("Bid Lot", "Lot Size", "Market Lot", "Minimum Bid Quantity", "Minimum Order Quantity"))
+        rec.issue_method = nz.parse_issue_method(pick("Issue Type"))
+        if rec.issue_method == "fixed_price" and rec.price_band_low and rec.price_band_low == rec.price_band_high:
+            rec.final_issue_price = rec.price_band_high  # a fixed-price issue is allotted at its stated price
+        rec.registrar = nz.strip_html(pick("Name of the Registrar", "Registrar"))
+        rec.lead_managers = nz.strip_html(pick("Book Running Lead Managers", "Lead Managers", "Lead Manager"))
+        rec.offer_document_url = nz.first_url(pick("Red Herring Prospectus", "Prospectus"))
+        rec.basis_of_price_url = nz.first_url(pick("Ratios / Basis of Issue Price"))
+        rec.issue_size_text = nz.strip_html(pick("Issue Size"))
         rec.industry = meta.get("industry") or None
         rec.isin = meta.get("isin") or None
         if meta.get("listingDate"):
@@ -267,21 +284,93 @@ class NSEEquityList:
                 out.setdefault(nz.normalize_company_name(name), sym)
         return out
 
-    def fetch(self, today: date) -> FetchResult[dict[str, str]]:
+    @staticmethod
+    def parse_records(text: str) -> dict[str, dict[str, object]]:
+        """symbol -> face value, ISIN, series and listing date as published in the list"""
+        out: dict[str, dict[str, object]] = {}
+        for row in csv.DictReader(io.StringIO(text)):
+            row = {k.strip().upper().replace("_", " "): (v or "").strip() for k, v in row.items() if k}
+            sym = row.get("SYMBOL")
+            if not sym:
+                continue
+            out[sym] = {"name": row.get("NAME OF COMPANY"), "series": row.get("SERIES"), "isin": row.get("ISIN NUMBER") or None,
+                        "face_value": nz.parse_number(row.get("FACE VALUE")), "listing_date": nz.parse_date(row.get("DATE OF LISTING"))}
+        return out
+
+    def _texts(self, today: date) -> FetchResult[list[str]]:
         s = get_settings()
-        merged: dict[str, str] = {}
+        texts: list[str] = []
         for url in self.URLS:
             cache = s.cache_dir / "equity_list" / f"{today:%Y%m%d}_{url.rsplit('/', 1)[-1]}"
             if cache.exists():
-                text = cache.read_text()
-            else:
-                try:
-                    body, _ = self.client.get(url, max_bytes=5 * 1024 * 1024)
-                except SourceError as exc:
-                    return FetchResult.unavailable(f"{exc.kind}: {exc}")
-                text = body.decode("utf-8", errors="replace")
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(text)
+                texts.append(cache.read_text())
+                continue
+            try:
+                body, _ = self.client.get(url, max_bytes=5 * 1024 * 1024)
+            except SourceError as exc:
+                return FetchResult.unavailable(f"{exc.kind}: {exc}")
+            text = body.decode("utf-8", errors="replace")
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(text)
+            texts.append(text)
+        return FetchResult.ok(texts, self.URLS[0])
+
+    def fetch(self, today: date) -> FetchResult[dict[str, str]]:
+        res = self._texts(today)
+        if res.status != "ok" or res.data is None:
+            return FetchResult.unavailable(res.error or "unavailable")
+        merged: dict[str, str] = {}
+        for text in res.data:
             for k, v in self.parse(text).items():
                 merged.setdefault(k, v)
         return FetchResult.ok(merged, self.URLS[0])
+
+    def fetch_records(self, today: date) -> FetchResult[dict[str, dict[str, object]]]:
+        res = self._texts(today)
+        if res.status != "ok" or res.data is None:
+            return FetchResult.unavailable(res.error or "unavailable")
+        merged: dict[str, dict[str, object]] = {}
+        for text in res.data:
+            for k, v in self.parse_records(text).items():
+                merged.setdefault(k, v)
+        return FetchResult.ok(merged, self.URLS[0])
+
+
+class NSEShareholdingSource:
+    """Shareholding-pattern filings (SEBI LODR Regulation 31) from NSE's corporate-filings JSON.
+
+    ``/api/corporate-share-holdings-master`` powers NSE's own shareholding-pattern pages; verified 2026-11-02 with a plain
+    User-Agent and no cookies (robots.txt allows /api/). ``pr_and_prgrp`` is the promoter and promoter-group share of the
+    total; the first filing of a newly listed company is stated as of the day before listing (Regulation 31(1)(a)), which is
+    the post-issue holding.
+    """
+
+    key = "nse_shareholding"
+
+    def __init__(self, client: PoliteClient) -> None:
+        self.client = client
+
+    @staticmethod
+    def page_url(symbol: str) -> str:
+        return f"{BASE}/companies-listing/corporate-filings-shareholding-pattern?symbol={symbol}"
+
+    @staticmethod
+    def parse(rows: object, symbol: str, url: str) -> list[ShareholdingRecord]:
+        out: list[ShareholdingRecord] = []
+        for r in rows if isinstance(rows, list) else []:
+            if not isinstance(r, dict):
+                continue
+            as_of, pct = nz.parse_date(str(r.get("date") or "")), nz.parse_number(r.get("pr_and_prgrp"))
+            if as_of is None or pct is None or not 0 <= pct <= 100:
+                continue
+            out.append(ShareholdingRecord(symbol=symbol, as_of=as_of, promoter_pct=pct, public_pct=nz.parse_number(r.get("public_val")),
+                                          filed_at=str(r.get("broadcastDate") or r.get("submissionDate") or "") or None, source_url=url))
+        return sorted(out, key=lambda x: x.as_of)
+
+    def fetch(self, symbol: str, sme: bool) -> FetchResult[list[ShareholdingRecord]]:
+        url = f"{BASE}/api/corporate-share-holdings-master?index={'sme' if sme else 'equities'}&symbol={symbol}"
+        try:
+            rows = self.client.get_json(url)
+        except SourceError as exc:
+            return FetchResult.unavailable(f"{exc.kind}: {exc}")
+        return FetchResult.ok(self.parse(rows, symbol, self.page_url(symbol)), self.page_url(symbol))

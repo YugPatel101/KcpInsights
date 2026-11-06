@@ -85,11 +85,54 @@ missing capability the product claims · **L** maintainability or presentation.
 | S1 | M | The `shadcn` CLI (bundling an MCP server, Express and Hono with open advisories) was a runtime dependency although only its CSS is used at build time | Moved to devDependencies |
 | S2 | M | Next.js 16.2.9 has advisories fixed in 16.4.x (middleware bypass, Server Actions DoS/SSRF, bundled postcss/sharp) | Not exploitable as configured — no middleware/proxy file, no Server Actions, no `next/image`. Upgrade documented in SECURITY.md (16.4.3 was 8 days old at audit time) |
 
+## Issue-data completeness audit (2 Nov 2026)
+
+Prompted by BLS Polymers showing no face value. Every IPO record was checked field by field against the
+sources, with Moneycontrol's IPO page used as the checklist of what an issue page should show (Moneycontrol
+itself refuses automated access — HTTP 403 even for `robots.txt` — so it is a reference, not a source).
+
+| # | Sev | Finding | Evidence | Fix |
+|---|---|---|---|---|
+| D9 | H | Face value lost whenever NSE wrote the rupee as "Re." | BLS Polymers: NSE `Face Value` = "Re. 10 per Equity Share"; the parser matched only "Rs." (19 mainboard issues) | `normalizer.RUPEE` accepts Rs./Re./₹/INR, anchored so "Re" inside "fresh" or "share" is not a rupee sign |
+| D10 | H | Every SME issue without a lot size | NSE titles the field "Bid Lot" on mainboard pages and "Lot Size" on SME pages (33/33 listed SME issues) | detail fields read through title aliases |
+| D11 | H | Pre-issue share count often wrong or missing, so post-issue shares, market cap and P/E were wrong or missing | Read from authorised capital (Fusion CX 200,000,000 vs 127,059,295), the post-offer row (R.K. Fashion) or a retail allocation (Papadmalji); a bracketed "(as at the date of this RHP)" defeated the pattern (93 of 140 missing) | capital-structure and offer-summary patterns; checked against the stored values on all 139 stored prospectuses |
+| D12 | M | Listed issues never re-checked: a field missing at listing stayed missing | details were fetched only for active issues | issues with any missing NSE field are re-checked weekly (`details_checked_at`) |
+| D13 | M | Promoter holding, promoters, listing exchanges, issue type, website and objects of the issue never extracted | registry said "not extracted automatically yet" (0 of 140) | `financials/offer_terms.py`: cover page, shareholding pattern ((A) row accepted only when promoter + public = 100% ±0.6 pt), objects table or list |
+| D14 | M | No post-issue promoter holding | — | NSE shareholding pattern filed for listing (official); derived for fresh-issue-only offers until then (RAVITA: derived 53.46% = filed 53.46%) |
+| D15 | M | Seven issue-size sentence variants left issue size or the fresh/OFS split empty | "Fresh offer …", "upto N fresh equity shares", OFS count without "Equity Shares", "aggregating up to 3200 million", whole-issue-only sentences | parser extended; whole-issue sentences set the total and leave the split unavailable instead of inventing it |
+| D16 | M | ISIN, issue type and fixed-price issue price not stored | NSE publishes them | stored; a fixed-price issue's price is its final price; ISIN and face value also from NSE's equity lists after listing |
+| D17 | M | P/E missing for 129 of 140 issues | it needs post-issue shares (D11) and verified statements | D11; issue facts also show P/E from statements that are read but not reconciled, labelled *unverified* and never scored |
+| D18 | L | A gap showed "—" with no reason on the overview | — | `issue_facts`: every issue fact has a source and status, or the reason it is empty (pending vs unavailable) |
+| D20 | H | 35 closed issues displayed a subscription of 0.00x | NSE's consolidated block for those issues lists bids but 0 shares offered and a "0" multiple (e.g. RAVITA: 3.75 crore shares bid) | a multiple with no shares offered is not stored; the 107 stored rows were removed (backup kept); the page now says NSE published no consolidated figure |
+| D19 | L | Two processes writing SQLite gave "database is locked" after 5 s | the gap-filling run collided with the API's scheduler | 30 s busy timeout; network requests never made inside a write transaction; transient locks retried on the next run |
+
+Coverage of the 140 real IPOs (121 announced by NSE, 112 listed), before → after:
+
+| Field | Before | After | Remaining gaps and why |
+|---|---|---|---|
+| Face value | 101 / 140 | **140 / 140** | — |
+| Issue type (book built / fixed price) | not stored | **140 / 140** | — |
+| Lot size (announced issues) | 88 / 121 | **121 / 121** | 19 pipeline issues: not announced yet |
+| Issue size (announced issues) | 114 / 121 | **121 / 121** | 8 still at the upper band until the price is final (labelled estimated) |
+| ISIN (listed issues) | not stored | **111 / 112** | 1 not published by NSE |
+| Listing exchanges | not stored | **139 / 140** | 1 prospectus could not be downloaded (NSE archive 404, dead letter) |
+| Shares before the issue | 47 / 140, several wrong | **138 / 140** | as above; 1 not found in a readable form |
+| Shares after the issue | 37 / 140 | **119 / 140** | 38 printed, 79 exact from share counts, 2 estimated at the upper band; 19 pipeline |
+| Promoter holding before the issue | 0 / 140 | **125 / 140** | 14 shareholding patterns not in a readable form (image tables, split pages) |
+| Promoter holding after the issue | 0 / 140 | **112 / 140** | 108 from NSE filings, 3 derived (fresh issue only), 1 estimated; 25 not listed yet, 3 filing not found yet |
+| Promoters | 0 / 140 | **137 / 140** | — |
+| Company website | 0 / 140 | **123 / 140** | 16 not on the cover page in a recognisable form |
+| Objects of the issue | 0 / 140 | **76 / 140** | utilisation tables that are images or span pages without a recognisable intro |
+| P/E used in scores (verified statements) | 11 / 140 | **51 / 140** | needs verified statements and post-issue shares |
+| P/E shown on the issue page | 11 / 140 | **66 / 140** (pre-issue EPS), **77 / 140** (market cap ÷ PAT) | 24–28 of these from statements read but not reconciled — labelled *unverified*, never scored; 19 pipeline; the rest lack readable statements or EPS |
+| Average completeness | 49.3% (55 fields) | **57.1%** (60 fields) | — |
+
 ## Remaining limitations (not fixed)
 
 * BSE refuses automated requests; BSE-only issues need a manual import.
 * SEBI listing pages beyond the first need a form token and are not automated (new filings appear on the first page).
-* Litigation tables and promoter holding are not extracted; they stay *unavailable*.
+* Litigation tables are not extracted; they stay *unavailable*. Registrar and lead-manager names are not read from draft offer documents (cover tables interleave intermediaries), so pipeline issues show them only once NSE announces the issue.
+* Moneycontrol and BSE refuse automated access (checked 2 Nov and 31 Oct 2026); they are not sources.
 * OCR results and lender KPI-table figures are shown but never scored.
 * The industry classifier is phrase-based; close calls are left Unclassified and NSE's own industry label is kept where published, so sector names mix two taxonomies.
 * Rate limiting is in-process; SQLite is single-writer — fine locally, not for several API workers.

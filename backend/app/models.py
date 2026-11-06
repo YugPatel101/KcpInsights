@@ -284,7 +284,13 @@ class IPOIssue(Base):
     offer_document_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     basis_of_price_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     issue_size_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    isin: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    issue_method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # book_built | fixed_price
+    listing_exchanges: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "NSE, BSE" or "NSE Emerge"
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # when the NSE issue-details page and the shareholding-pattern filings were last requested (drives re-checks)
+    details_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    shareholding_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     risk_disclosures_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
     # facts read from the offer document: {key: {value, page, text, basis, document_id, read_at}}
     document_facts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

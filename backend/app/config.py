@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     ingest_filings_minutes: int = 720
     # listed peers: daily official closing price from the NSE bhavcopy, matched via the NSE equity list
     ingest_peer_prices_minutes: int = 1440
+    # Gap filling for every IPO, not only active ones: NSE issue details are re-checked weekly while NSE-published fields
+    # are missing; the enrichment job adds face value/ISIN from NSE's equity lists, the shareholding pattern filed with
+    # NSE after listing, and re-reads stored offer documents when the offer-terms extractor changes
+    details_recheck_days: int = 7
+    ingest_enrichment_minutes: int = 360
+    ingest_max_shareholding_per_run: int = 15
+    ingest_max_offer_term_rereads_per_run: int = 10
     # Local OCR (Tesseract) for image-only prospectus pages; skipped automatically when Tesseract is not installed
     ocr_enabled: bool = True
     ocr_max_pages: int = 150

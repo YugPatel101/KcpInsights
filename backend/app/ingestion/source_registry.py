@@ -35,7 +35,11 @@ SOURCES: list[SourceSpec] = [
                "become pipeline issues; a SEBI RHP is read only when the NSE copy could not be. Older pages need a form token and are "
                "not automated. SME offer documents are filed with the exchange, not SEBI."),
     SourceSpec("nse_equity_list", "NSE listed-equity lists (archives)", "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv", "official",
-               "automatic", "Symbol and company name of every NSE mainboard and SME equity; used to match listed peers to the daily bhavcopy."),
+               "automatic", "Symbol, company name, face value and ISIN of every NSE mainboard and SME equity; used to match listed peers to "
+               "the daily bhavcopy and as the fallback for a listed issue's face value and ISIN."),
+    SourceSpec("nse_shareholding", "NSE shareholding-pattern filings", "https://www.nseindia.com/companies-listing/corporate-filings-shareholding-pattern",
+               "official", "automatic", "Promoter and public shareholding filed by each listed company (SEBI LODR Regulation 31). The pattern "
+               "filed for listing gives the post-issue promoter holding. Public JSON used by NSE's own pages; robots.txt allows."),
     SourceSpec("company_ir", "Company investor-relations pages", "", "official", "manual_only",
                "Not crawled automatically (no common structure). Restated financials come from the offer document instead."),
     SourceSpec("user_import", "User-imported research", "", "manual", "manual_only", "CSV/JSON imports with stated provenance."),

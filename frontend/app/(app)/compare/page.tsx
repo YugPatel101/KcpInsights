@@ -5,7 +5,7 @@ import { Fragment, useState } from "react";
 import IpoPicker from "@/components/ipo/IpoPicker";
 import { CompletenessMeter, DataStatusBadge, ErrorState, LoadingBlock, Notice, PageHeader, Panel, ReadinessBadge, RiskBadge, ScoreValue, buttonClass } from "@/components/kcp/ui";
 import { api, errorMessage } from "@/lib/api";
-import { fmtCr, fmtMetric, fmtNum, fmtPct, fmtScore, priceBand, titleCase } from "@/lib/format";
+import { fmtCr, fmtInr, fmtInt, fmtMetric, fmtNum, fmtPct, fmtScore, priceBand, titleCase } from "@/lib/format";
 import type { ComponentKey, IpoSummary, PeerSummary, ScoreResult, ScoreSummary } from "@/lib/types";
 
 interface CompareItem {
@@ -94,6 +94,9 @@ export default function ComparePage() {
                     {row("Status", (i) => titleCase(i.ipo.status))}
                     {row("Price band", (i) => priceBand(i.ipo.price_band_low, i.ipo.price_band_high))}
                     {row("Issue size", (i) => fmtCr(i.ipo.issue_size_cr, 0))}
+                    {row("Face value", (i) => fmtInr(i.ipo.face_value ?? null, 0))}
+                    {row("Lot size · one lot at upper band", (i) => i.ipo.lot_size ? `${fmtInt(i.ipo.lot_size)} · ${fmtInr(i.ipo.min_investment_inr, 0)}` : "—")}
+                    {row("Promoter holding pre → post", (i) => `${fmtPct(i.ipo.promoter_holding_pre_pct ?? null, 2)} → ${fmtPct(i.ipo.promoter_holding_post_pct ?? null, 2)}`)}
                     {row("Stage", (i) => titleCase(i.ipo.stage))}
                     {row("Fundamental score", (i) => <ScoreValue value={i.scores.composite} />)}
                     {row("Classification", (i) => i.scores.classification ?? "—")}

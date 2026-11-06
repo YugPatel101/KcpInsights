@@ -6,6 +6,7 @@
 | Port 8000 or 3000 in use | another process | `KCP_API_PORT=8001 scripts/dev.sh` (`KCP_WEB_PORT` for the web port) |
 | New colours/classes do not appear after editing styles | stale Next.js dev cache | stop `scripts/dev.sh`, delete `frontend/.next`, start again |
 | `next build` fails or the dev server breaks after a build | both use `frontend/.next` | stop the dev server before building; delete `.next` and restart dev afterwards |
+| An issue field shows a reason instead of a value | the field is not published yet at this stage, the sources tried do not publish it, or (after listing) the shareholding pattern has not been filed yet | the reason is the answer; gaps are re-checked automatically (NSE details weekly, shareholding daily for a month after listing). To fill every gap now: `cd backend && .venv/bin/python -m app.cli fill-gaps` |
 | An IPO has no financials | its prospectus is not linked yet, still queued, scanned, or failed checks | open the IPO's **Data completeness** tab: each missing field says why, and *Offer-document sources tried* lists NSE and SEBI attempts. **System health** shows queued, backing-off and dead-letter documents |
 | Many prospectuses "pending" | the documents job reads ≤ 3 per hour | `cd backend && .venv/bin/python -m app.cli process-documents --limit 20` |
 | A document is a "dead letter" | 5 failed attempts (e.g. HTTP 404) | check the source URL; an admin can re-process a stored original from the Documents tab; otherwise wait for a revised link from NSE or a SEBI filing |

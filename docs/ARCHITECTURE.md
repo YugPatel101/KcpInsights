@@ -41,15 +41,17 @@
 | `app/ingestion/http.py` | Polite client: per-host serialisation and spacing, streamed size limits, bounded retries, HEAD |
 | `app/ingestion/sources/nse.py`, `sebi.py`, `bse.py` | Source adapters (parse and validate each source's own format) |
 | `app/ingestion/source_registry.py` | Source authority, access mode, health |
-| `app/ingestion/ipo_data_service.py` | Upserts with field-level provenance and precedence; expected dates; listing prices |
+| `app/ingestion/ipo_data_service.py` | Upserts with field-level provenance and precedence; expected dates; listing prices; shareholding filings |
 | `app/ingestion/document_service.py` | Offer-document pipeline (NSE + SEBI), OCR fallback, dedupe, backoff, dead letters, pruning |
-| `app/ingestion/financial_store.py` | Persist statements (+ line-item provenance), peers, facts, classification |
-| `app/ingestion/ingestion_scheduler.py` | Jobs, cross-process locks, interrupted-job recovery, rescoring after changes |
+| `app/ingestion/financial_store.py` | Persist statements (+ line-item provenance), peers, facts, offer terms, classification; derived post-issue shares and promoter holding |
+| `app/ingestion/ingestion_scheduler.py` | Jobs (incl. weekly gap re-checks and the enrichment job), cross-process locks, interrupted-job recovery, rescoring after changes |
 | `app/financials/pdf_tables.py`, `statement_parser.py` | Rebuild tables from word positions; periods, units, checks |
 | `app/financials/ocr.py` | Tesseract via PyMuPDF for image-only pages |
 | `app/financials/disclosures.py`, `industry.py` | Peers, facts, business overview; sector classifier and lender KPIs |
+| `app/financials/offer_terms.py` | Cover page, share capital, shareholding pattern and objects of the issue (versioned; re-read automatically on change) |
 | `app/services/quant_engine.py`, `scoring_config.py` | Ratios, scores, risk; versioned configuration and industry profiles |
 | `app/services/field_registry.py`, `completeness.py` | Field registry; per-IPO completeness, pipeline stage, sources tried |
+| `app/services/issue_facts.py` | Key issue facts for the research page: value + source/status, or the reason it is missing |
 | `app/services/ipo_service.py` | Serialisation, engine inputs, stored-score access, refresh |
 | `app/api/routes/*` | REST endpoints (OpenAPI at `/api/docs`) |
 | `app/cli.py`, `cli_e2e.py` | Administration and the end-to-end demonstration |

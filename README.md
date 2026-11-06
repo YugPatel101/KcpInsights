@@ -27,7 +27,13 @@ No paid services, API keys or AI models; no manual data entry. Runs fully on one
   ratios or EBITDA.
 * **Peers** — the issuer's own listed peers with quartile benchmarks, price dates, staleness flags and
   the latest official close; similar IPOs on record.
-* **Data completeness** — 55 registry fields per IPO, each available / estimated / unverified /
+* **Issue details** — face value, price band, lot and one-lot value, issue size (fresh / offer for sale),
+  shares offered, shares before/after the issue, market cap and P/E at the issue price (P/E from unreconciled
+  statements is labelled unverified and never scored), promoter holding before and
+  after the issue, promoters, listing exchanges, ISIN, registrar, lead managers, website and the objects of
+  the issue — each with its source (NSE, the offer document page, an NSE filing, or a stated derivation) or
+  the reason it is empty.
+* **Data completeness** — 60 registry fields per IPO, each available / estimated / unverified /
   unavailable (with reason) / not applicable / not yet expected; analysis readiness; pipeline stage.
 * **Listing history** — listing-day open, high, low, close from the official bhavcopy; listing gain and
   closing return; sector, type and size summaries; point-in-time score-versus-outcome analysis.
@@ -43,7 +49,7 @@ No paid services, API keys or AI models; no manual data entry. Runs fully on one
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2, Alembic, APScheduler, httpx, PyMuPDF, Tesseract (optional), Argon2 |
 | Database | SQLite (WAL) |
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Recharts 3, Zod |
-| Quality | pytest (89), vitest (14), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
+| Quality | pytest (111), vitest (14), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
 
 ## Architecture
 
@@ -89,7 +95,7 @@ cd frontend && npm install && npm run dev
 ```
 
 Useful commands (from `backend/`): `python -m app.cli sync`, `process-documents --limit 20`,
-`backfill-history --days 365`, `reclassify`, `refresh-scores`, `create-admin`, `e2e-demo BCSSL`.
+`backfill-history --days 365`, `fill-gaps`, `reclassify`, `refresh-scores`, `create-admin`, `e2e-demo BCSSL`.
 
 ## Screenshots
 
@@ -115,10 +121,12 @@ is recorded in [docs/E2E_DEMONSTRATION.md](docs/E2E_DEMONSTRATION.md).
 | Source | Access | Provides |
 |---|---|---|
 | NSE public issue information | automatic | issue terms, dates, subscription, final price, listing date |
-| NSE bhavcopy and equity lists | automatic | listing-day open/high/low/close; peer prices |
+| NSE bhavcopy and equity lists | automatic | listing-day open/high/low/close; peer prices; face value and ISIN fallback |
+| NSE shareholding-pattern filings | automatic | official post-issue and latest promoter holding |
 | Offer documents (NSE archives) | automatic | restated statements, peers, disclosures, business overview, industry |
 | SEBI DRHP/RHP filings | automatic | new filings; fallback prospectus copy |
 | BSE | blocked for automated access | manual import |
+| Moneycontrol | blocked for automated access (HTTP 403) | used only as a checklist of fields an IPO page should show |
 
 Full detail, verification dates and request discipline: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 Field-by-field sources and checks: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md).

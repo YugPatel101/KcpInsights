@@ -212,16 +212,24 @@ class Disclosure:
     basis: str | None = None
 
 
+_PRE_ISSUE = [re.compile(p, re.I) for p in (
+    # capital structure: "ISSUED, SUBSCRIBED AND PAID-UP SHARE CAPITAL BEFORE THE ISSUE 4,50,31,834 Equity Shares";
+    # offer summary: "Equity Shares outstanding prior to the Issue (as at the date of this RHP) 4,50,31,834 Equity Shares"
+    r"(?:paid[- ]up|outstanding)[a-z ,]{0,40}?(?:before|prior to) the (?:issue|offer)[^\[●]{0,150}?\b(\d{1,3}(?:,\d{2,3})+)\s?"
+    r"(?:fully paid[- ]up )?equity shares",
+    r"(?:before|prior to) the (?:issue|offer)[^\[●\d]{0,150}?\b(\d{1,3}(?:,\d{2,3})+)\s?(?:fully paid[- ]up )?equity shares",
+    r"([\d,]{5,})\s*equity shares[^.]{0,80}?(?:outstanding )?(?:prior to|before) the (?:issue|offer)",
+)]
+
+
 def pre_issue_shares(texts: list[str]) -> Disclosure | None:
-    pats = [r"equity shares (?:outstanding )?(?:prior to|before) the (?:issue|offer)\s*:?\s*([\d,]{5,})\s*(?:fully paid[- ]up )?equity shares",
-            r"([\d,]{5,})\s*equity shares[^.]{0,80}?(?:outstanding )?(?:prior to|before) the (?:issue|offer)"]
     for i, t in enumerate(texts[:260]):
         flat = _flat(t)
-        for pat in pats:
-            m = re.search(pat, flat, re.I)
+        for pat in _PRE_ISSUE:
+            m = pat.search(flat)
             if m:
                 n = int(m.group(1).replace(",", ""))
-                if n >= 10_000:
+                if n >= 100_000:
                     return Disclosure("pre_issue_shares", n, i + 1, flat[max(0, m.start() - 40): m.end() + 40])
     return None
 

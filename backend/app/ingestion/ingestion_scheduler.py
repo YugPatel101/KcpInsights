@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -31,17 +31,21 @@ from app.ingestion.http import PoliteClient
 from app.ingestion.source_registry import ensure_sources, record_source_result
 from app.ingestion.sources.base import IssueRecord
 from app.ingestion.sources.bse import BSEPublicIssuesSource
-from app.ingestion.sources.nse import NSEBhavcopySource, NSEEquityList, NSEOfficialSource
+from app.ingestion.sources.nse import NSEBhavcopySource, NSEEquityList, NSEOfficialSource, NSEShareholdingSource
 from app.ingestion.sources.sebi import SEBIFilingsSource
-from app.models import DataSource, FieldObservation, IngestionJob, IPOIssue, JobLock, PeerSnapshot, utcnow
+from app.models import DataSource, FieldObservation, IngestionJob, IPOIssue, JobLock, PeerSnapshot, SourceDocument, utcnow
 
 log = logging.getLogger("kcp.ingestion")
 
-JOB_TYPES = ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "health")
+JOB_TYPES = ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "enrichment", "health")
 JOB_LOCK = {"discover": "source:nse", "details": "source:nse", "subscriptions": "source:nse", "listings": "source:nse",
-            "filings": "source:sebi", "documents": "source:documents", "peers": "source:nse_archives", "health": "source:health"}
+            "filings": "source:sebi", "documents": "source:documents", "peers": "source:nse_archives", "enrichment": "source:nse",
+            "health": "source:health"}
 # DataSource row that a job's requests and health are attributed to
-JOB_SOURCE = {"listings": "nse_bhavcopy", "health": "bse_ipo", "documents": "nse_rhp", "filings": "sebi_offer_documents", "peers": "nse_equity_list"}
+JOB_SOURCE = {"listings": "nse_bhavcopy", "health": "bse_ipo", "documents": "nse_rhp", "filings": "sebi_offer_documents", "peers": "nse_equity_list",
+              "enrichment": "nse_shareholding"}
+# fields NSE publishes on the issue-details page; an issue missing any of them is re-checked weekly, whatever its age
+DETAIL_FIELDS = ("face_value", "lot_size", "price_band_high", "registrar", "lead_managers", "offer_document_url", "issue_method", "isin")
 OWNER = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
 
 
@@ -93,13 +97,15 @@ class IngestionRunner:
         self.bse = BSEPublicIssuesSource(self.client)
         self.sebi = SEBIFilingsSource(self.client)
         self.equity_list = NSEEquityList(self.client)
+        self.shareholding = NSEShareholdingSource(self.client)
         self.today = today
         self._mutex = threading.Lock()
 
     # ---------------------------------------------------------------- orchestration
     def run(self, job_type: str, trigger: str = "schedule") -> dict[str, Any]:
         if job_type == "all":
-            results = [self.run(j, trigger) for j in ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers")]
+            results = [self.run(j, trigger) for j in ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers",
+                                                          "enrichment")]
             return {"job_type": "all", "runs": results}
         if job_type not in JOB_TYPES:
             raise ValueError(f"unknown job {job_type!r}")
@@ -171,9 +177,11 @@ class IngestionRunner:
     @staticmethod
     def _rescore(db: Session, job: IngestionJob, ipo_ids: set[int] | None) -> None:
         """Scores and completeness are stored, not computed per request: refresh them for IPOs whose inputs changed."""
+        from app.ingestion.financial_store import refresh_derived
         from app.services.ipo_service import refresh_scores
 
         try:
+            refresh_derived(db, ipo_ids)
             res = refresh_scores(db, ipo_ids)
             job.detail = {**(job.detail or {}), "rescored": res}
         except Exception as exc:  # noqa: BLE001 - scoring problems must not fail ingestion
@@ -209,33 +217,37 @@ class IngestionRunner:
         return list(db.execute(select(IPOIssue).where(IPOIssue.nse_symbol.is_not(None))).scalars())
 
     def job_details(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """NSE issue details: active issues every run; any other issue still missing an NSE-published field, weekly."""
         s = get_settings()
         today = self.today()
-        cutoff = utcnow() - timedelta(minutes=s.ingest_details_minutes)
-        todo = []
+        now = utcnow()
+        cutoff = now - timedelta(minutes=s.ingest_details_minutes)
+        recheck = now - timedelta(days=s.details_recheck_days)
+        active, repair = [], []
         for ipo in self._live_ipos(db):
-            relevant = (ipo.close_date is None or ipo.close_date >= today - timedelta(days=3)) or (
-                ipo.listing_date is not None and ipo.listing_date >= today - timedelta(days=10) and ipo.company.sector == "Unclassified") or (
-                # listed issues: one details fetch to find the offer-document link for financial statements
-                ipo.offer_document_url is None and ipo.listing_date is not None
-                and ipo.listing_date >= today - timedelta(days=s.document_window_days))
-            if not relevant:
-                continue
-            obs = svc._latest_obs(db, ipo.id, "face_value")
-            if obs is None or obs.last_verified_at < cutoff:
-                todo.append(ipo)
-        todo = todo[: s.ingest_max_detail_fetches_per_run]
+            checked = ipo.details_checked_at
+            if (ipo.close_date is None or ipo.close_date >= today - timedelta(days=3)) or (
+                    ipo.listing_date is not None and ipo.listing_date >= today - timedelta(days=10) and ipo.company.sector == "Unclassified"):
+                if checked is None or checked < cutoff:
+                    active.append(ipo)
+            elif any(getattr(ipo, f) is None for f in DETAIL_FIELDS) and (checked is None or checked < recheck):
+                repair.append(ipo)
+        todo = (active + sorted(repair, key=lambda i: i.listing_date or today, reverse=True))[: s.ingest_max_detail_fetches_per_run]
         failures = 0
         changed: set[int] = set()
         for ipo in todo:
             series = "SME" if ipo.issue_type == "sme" else "EQ"
-            res = self.nse.fetch_ipo_details(ipo.nse_symbol or "", series)
+            symbol, name = ipo.nse_symbol or "", ipo.company.name
+            res = self.nse.fetch_ipo_details(symbol, series)
+            # one short write per issue, after the request: the database is never held while waiting on the network
+            ipo.details_checked_at = now
             if res.status != "ok" or res.data is None:
                 failures += 1
-                job.errors = [*job.errors, {"symbol": ipo.nse_symbol, "error": res.error}]
+                job.errors = [*job.errors, {"symbol": symbol, "error": res.error}]
+                db.commit()
                 continue
             rec, subs = res.data
-            rec.company_name = ipo.company.name  # the detail payload may carry only the symbol
+            rec.company_name = name  # the detail payload may carry only the symbol
             try:
                 with db.begin_nested():
                     st = svc.upsert_issue(db, rec, source_key="nse_ipo")
@@ -243,13 +255,13 @@ class IngestionRunner:
                     svc.upsert_subscriptions(db, ipo, subs)
                     changed |= st.changed_ipo_ids
             except Exception as exc:  # noqa: BLE001
-                job.errors = [*job.errors, {"symbol": ipo.nse_symbol, "error": f"{type(exc).__name__}: {exc}"[:300]}]
-        db.commit()
+                job.errors = [*job.errors, {"symbol": symbol, "error": f"{type(exc).__name__}: {exc}"[:300]}]
+            db.commit()
         self._rescore(db, job, changed)
         if todo:
             record_source_result(db, "nse_ipo", ok=failures < len(todo), error=job.errors[-1]["error"] if failures else None)
         status = "success" if not job.errors else ("failed" if failures == len(todo) and todo else "partial")
-        return status, {"fetched": len(todo), "failures": failures}
+        return status, {"fetched": len(todo), "active": len(active), "gap_rechecks": len(todo) - min(len(active), len(todo)), "failures": failures}
 
     def job_subscriptions(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
         today = self.today()
@@ -384,6 +396,105 @@ class IngestionRunner:
         db.commit()
         return "success", {"peers": len(peers), "matched": matched, "price_date": day[0].isoformat()}
 
+    def job_enrichment(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """Fill gaps for every IPO from official fallbacks, oldest gaps included.
+
+        1. Offer terms re-read from stored offer documents when the extractor changed (no requests).
+        2. Face value and ISIN of listed issues from NSE's listed-equity lists (one cached download a day).
+        3. Post-issue promoter holding from the shareholding pattern the company files with NSE on listing.
+        """
+        from app.financials.offer_terms import EXTRACTOR_VERSION
+        from app.ingestion.document_service import DOC_SOURCES, reread_offer_terms
+
+        s = get_settings()
+        today = self.today()
+        now = utcnow()
+        changed: set[int] = set()
+        detail: dict[str, Any] = {}
+        # 1) stored documents read by an older offer-terms extractor
+        with_docs = set(db.execute(select(SourceDocument.ipo_id).where(
+            SourceDocument.source_key.in_(DOC_SOURCES), SourceDocument.original_retained.is_(True),
+            SourceDocument.extraction_status.in_(("extracted", "partial", "not_found")))).scalars())
+        ipos = list(db.execute(select(IPOIssue).where(IPOIssue.data_mode == "source", IPOIssue.id.in_(with_docs))).scalars())
+        stale = [i for i in ipos if ((i.document_facts or {}).get("offer_terms_version") or {}).get("value") != EXTRACTOR_VERSION]
+        reread = 0
+        for ipo in stale[: s.ingest_max_offer_term_rereads_per_run]:
+            ipo_id = ipo.id
+            try:
+                if reread_offer_terms(db, ipo):
+                    db.commit()
+                    reread += 1
+                    changed.add(ipo_id)
+            except OperationalError as exc:  # database busy: transient, retried on the next run
+                db.rollback()
+                job.errors = [*job.errors, {"ipo_id": ipo_id, "stage": "offer_terms", "error": f"database busy, will retry: {exc.orig}"[:200]}]
+            except Exception as exc:  # noqa: BLE001 - one unreadable document must not stop the run
+                db.rollback()
+                job.errors = [*job.errors, {"ipo_id": ipo_id, "stage": "offer_terms", "error": f"{type(exc).__name__}: {exc}"[:300]}]
+                # stamp the version anyway, so an unreadable file is not retried on every run (re-read after the next change)
+                bad = db.get(IPOIssue, ipo_id)
+                if bad is not None:
+                    bad.document_facts = {**(bad.document_facts or {}), "offer_terms_version": {
+                        "value": EXTRACTOR_VERSION, "page": None, "text": "", "basis": f"read failed: {type(exc).__name__}",
+                        "document_id": None, "read_at": now.isoformat()}}
+                    db.commit()
+        detail["offer_terms_reread"] = reread
+        # 2) NSE listed-equity lists: face value and ISIN for listed issues still missing them
+        listed = [i for i in self._live_ipos(db) if i.listing_date_status == "actual" and i.listing_date and i.listing_date <= today]
+        if any(i.face_value is None or i.isin is None for i in listed):
+            res = self.equity_list.fetch_records(today)
+            if res.status == "ok" and res.data:
+                filled = 0
+                for ipo in listed:
+                    row = res.data.get(ipo.nse_symbol or "")
+                    if row is None:
+                        continue
+                    st = svc.UpsertStats()
+                    for fld, val in (("face_value", row.get("face_value")), ("isin", row.get("isin"))):
+                        if getattr(ipo, fld) is None and val:
+                            svc.set_field(db, ipo, fld, val, source_key="nse_equity_list", source_url=res.source_url, status="verified",
+                                          basis="NSE listed-equity list", stats=st)
+                    filled += st.fields_changed
+                    changed |= st.changed_ipo_ids
+                db.commit()
+                record_source_result(db, "nse_equity_list", ok=True)
+                detail["equity_list_fields"] = filled
+            else:
+                job.errors = [*job.errors, {"source": "nse_equity_list", "error": res.error}]
+        # 3) shareholding pattern filed on listing: the official post-issue promoter holding
+        due = []
+        for ipo in listed:
+            obs = svc._latest_obs(db, ipo.id, "promoter_holding_post_pct")
+            if obs is not None and obs.source_key == "nse_shareholding":
+                continue
+            age = (today - ipo.listing_date).days  # type: ignore[operator]
+            wait = timedelta(days=1 if age <= 30 else 7 if age <= 180 else 30)
+            if ipo.shareholding_checked_at is None or now - ipo.shareholding_checked_at >= wait:
+                due.append(ipo)
+        due.sort(key=lambda i: i.listing_date or today, reverse=True)
+        found = failures = 0
+        for ipo in due[: s.ingest_max_shareholding_per_run]:
+            symbol = ipo.nse_symbol or ""
+            res_sh = self.shareholding.fetch(symbol, ipo.issue_type == "sme")
+            ipo.shareholding_checked_at = now
+            if res_sh.status != "ok" or res_sh.data is None:
+                failures += 1
+                job.errors = [*job.errors, {"symbol": symbol, "stage": "shareholding", "error": res_sh.error}]
+            else:
+                st = svc.apply_shareholding(db, ipo, res_sh.data)
+                found += st.fields_changed > 0
+                changed |= st.changed_ipo_ids
+            db.commit()
+        if due:
+            record_source_result(db, "nse_shareholding", ok=failures < min(len(due), s.ingest_max_shareholding_per_run),
+                                 error=job.errors[-1]["error"] if failures else None)
+        detail.update({"shareholding_checked": min(len(due), s.ingest_max_shareholding_per_run), "shareholding_found": found,
+                       "shareholding_waiting": max(0, len(due) - s.ingest_max_shareholding_per_run)})
+        self._rescore(db, job, changed)
+        if not stale and not due and "equity_list_fields" not in detail:
+            return "skipped", {"reason": "no gaps to fill from fallback sources; no requests made", **detail}
+        return ("success" if not job.errors else "partial"), detail
+
     def job_health(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
         src = ensure_sources(db)
         bse: DataSource = src["bse_ipo"]
@@ -454,7 +565,8 @@ def start_scheduler() -> Any:
     now = utcnow()
     plan = [("discover", s.ingest_discovery_minutes, 15), ("details", s.ingest_details_minutes, 90), ("subscriptions", s.ingest_subscription_minutes, 150),
             ("listings", s.ingest_listing_minutes, 200), ("health", s.ingest_health_minutes, 60), ("filings", s.ingest_filings_minutes, 240),
-            ("documents", s.ingest_documents_minutes, 300), ("peers", s.ingest_peer_prices_minutes, 420)]
+            ("documents", s.ingest_documents_minutes, 300), ("peers", s.ingest_peer_prices_minutes, 420),
+            ("enrichment", s.ingest_enrichment_minutes, 480)]
     import datetime as _dt
 
     for name, minutes, delay in plan:

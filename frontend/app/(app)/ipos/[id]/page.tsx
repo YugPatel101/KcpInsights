@@ -11,6 +11,7 @@ import KeyDates from "@/components/live/KeyDates";
 import ProvenancePanel from "@/components/live/ProvenancePanel";
 import SubscriptionTable from "@/components/live/SubscriptionTable";
 import FinancialsPanel from "@/components/ipo/FinancialsPanel";
+import IssueFactsPanel from "@/components/ipo/IssueFactsPanel";
 import RatiosPanel from "@/components/ipo/RatiosPanel";
 import RiskPanel from "@/components/ipo/RiskPanel";
 import ScoreBreakdown from "@/components/ipo/ScoreBreakdown";
@@ -37,7 +38,7 @@ import {
 } from "@/components/kcp/ui";
 import { api, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { PROFILE_LABEL, fmtCr, fmtDate, fmtDateTime, fmtInr, fmtInt, fmtNum, fmtPct, returnTone } from "@/lib/format";
+import { PROFILE_LABEL, fmtCr, fmtDate, fmtDateTime, fmtInr, fmtNum, fmtPct, returnTone } from "@/lib/format";
 import { timeAgo } from "@/lib/time";
 import { useApi } from "@/lib/useApi";
 import type { IpoDetail, ScoreResult } from "@/lib/types";
@@ -188,6 +189,7 @@ export default function IpoPage({ params }: { params: Promise<{ id: string }> })
 }
 
 function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
+  const objects = (d.document_facts as Record<string, { page?: number | null; document_id?: number | null } | undefined>).objects_of_issue;
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="space-y-6 lg:col-span-2">
@@ -250,44 +252,24 @@ function Overview({ d, onSaved }: { d: IpoDetail; onSaved: () => void }) {
           )}
         </Panel>
 
-        <Panel title="Issue structure">
-          <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-            {[
-              ["Opens / closes", `${fmtDate(d.open_date)} – ${fmtDate(d.close_date)}`],
-              [d.listing_date_status === "expected" ? "Listing date (expected, T+3 estimate)" : "Listing date", fmtDate(d.listing_date)],
-              ["Issue size", fmtCr(d.issue_size_cr)],
-              ["Fresh issue / OFS", `${fmtCr(d.fresh_issue_cr)} / ${fmtCr(d.ofs_cr)}`],
-              ["Final issue price", fmtInr(d.final_issue_price)],
-              ["Face value", fmtInr(d.face_value)],
-              ["Pre / post-issue shares", `${fmtInt(d.pre_issue_shares)} / ${fmtInt(d.post_issue_shares)}`],
-              ["Dilution from fresh issue", fmtPct(d.dilution_pct, 2)],
-              ["Promoter holding pre → post", `${fmtPct(d.promoter_holding_pre_pct)} → ${fmtPct(d.promoter_holding_post_pct)}`],
-              ["Listing-day open", d.listing_price !== null ? `${fmtInr(d.listing_price)}${d.listing_return_pct !== null ? ` (${fmtPct(d.listing_return_pct, 1, true)} vs issue price)` : ""}` : "—"],
-              ["Listing-day close", fmtInr(d.listing_close_price ?? null)],
-            ].map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4 border-b border-line py-1.5"><dt className="text-ink-2">{k}</dt><dd className="text-right tabular-nums text-ink">{v}</dd></div>
-            ))}
-          </dl>
-          {(d.registrar || d.lead_managers || d.offer_document_url || d.issue_size_text) && (
-            <div className="mt-5 space-y-1.5 text-sm">
-              {d.registrar && <p><span className="text-ink-3">Registrar: </span><span className="text-ink-2">{d.registrar}</span></p>}
-              {d.lead_managers && <p><span className="text-ink-3">Lead managers: </span><span className="text-ink-2">{d.lead_managers}</span></p>}
-              {d.issue_size_text && <p className="text-xs leading-5 text-ink-3">Issue as published: {d.issue_size_text}</p>}
-              <p className="flex flex-wrap gap-3 text-xs">
-                {d.offer_document_url && <a className="text-brand-ink hover:underline" href={d.offer_document_url} target="_blank" rel="noopener noreferrer">Red Herring Prospectus (NSE, zip)</a>}
-                {d.basis_of_price_url && <a className="text-brand-ink hover:underline" href={d.basis_of_price_url} target="_blank" rel="noopener noreferrer">Basis of issue price (NSE, zip)</a>}
-              </p>
-            </div>
-          )}
-          {d.use_of_proceeds && d.use_of_proceeds.length > 0 && (
-            <div className="mt-5">
-              <h3 className="mb-2 text-xs uppercase tracking-wider text-ink-3">Use of fresh-issue proceeds</h3>
-              <ul className="space-y-1 text-sm">
-                {d.use_of_proceeds.map((u) => (
-                  <li key={u.purpose} className="flex justify-between gap-4"><span className="text-ink-2">{u.purpose}</span><span className="tabular-nums text-ink-2">{fmtCr(u.amount_cr)}</span></li>
-                ))}
-              </ul>
-            </div>
+        {d.issue_facts ? <IssueFactsPanel d={d} /> : null}
+
+        <Panel title="Objects of the issue"
+               subtitle={objects ? <>As listed in the offer document{objects.page ? <>, <a className="text-brand-ink hover:underline" href={`/api/documents/${objects.document_id}/file#page=${objects.page}`} target="_blank" rel="noopener noreferrer">p{objects.page}</a></> : null}; amounts in ₹ crore where the table prints one</> : undefined}>
+          {d.use_of_proceeds && d.use_of_proceeds.length > 0 ? (
+            <ol className="space-y-2 text-sm">
+              {d.use_of_proceeds.map((u, i) => (
+                <li key={`${i}-${u.purpose}`} className="flex justify-between gap-4 border-b border-line pb-2 last:border-0">
+                  <span className="text-ink-2"><span className="mr-2 text-ink-3">{i + 1}.</span>{u.purpose}</span>
+                  <span className="shrink-0 tabular-nums text-ink">{u.amount_cr !== null ? fmtCr(u.amount_cr, 2) : <span className="text-xs text-ink-3">not fixed yet</span>}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-sm text-ink-3">
+              {d.status === "pipeline" || d.documents.length === 0 ? "Read from the offer document once it is available."
+                : "Not found in a readable form in the offer document's 'Objects of the Issue' chapter."}
+            </p>
           )}
         </Panel>
         <ResearchNotes d={d} onSaved={onSaved} />

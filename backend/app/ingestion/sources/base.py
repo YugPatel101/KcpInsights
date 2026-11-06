@@ -58,8 +58,21 @@ class IssueRecord:
     offer_document_url: str | None = None
     basis_of_price_url: str | None = None
     issue_size_text: str | None = None
+    issue_method: str | None = None  # book_built | fixed_price
     status_text: str | None = None
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ShareholdingRecord:
+    """One shareholding-pattern filing on the exchange (SEBI LODR Regulation 31)."""
+
+    symbol: str
+    as_of: date  # the date the pattern is stated as of
+    promoter_pct: float  # promoter and promoter group, % of total shares
+    public_pct: float | None
+    filed_at: str | None
+    source_url: str
 
 
 @dataclass

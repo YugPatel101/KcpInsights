@@ -12,16 +12,17 @@ _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun",
 
 
 def parse_date(value: object) -> date | None:
-    """'29-Oct-2026', '23-OCT-2026', '2026-10-28', '28-10-2026' -> date."""
+    """'29-Oct-2026', '23-OCT-2026', '22-Oct-26' (NSE SME list), '2026-10-28', '28-10-2026' -> date."""
     if not isinstance(value, str):
         return None
     v = value.strip()
     if not v or v in ("-", "NA", "N.A."):
         return None
-    m = re.fullmatch(r"(\d{1,2})-([A-Za-z]{3})-(\d{4})", v)
+    m = re.fullmatch(r"(\d{1,2})-([A-Za-z]{3})-(\d{4}|\d{2})", v)
     if m:
         mon = _MONTHS.get(m.group(2).lower())
-        return date(int(m.group(3)), mon, int(m.group(1))) if mon else None
+        year = int(m.group(3)) + (2000 if len(m.group(3)) == 2 else 0)
+        return date(year, mon, int(m.group(1))) if mon else None
     m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
     if m:
         return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
@@ -80,28 +81,64 @@ def parse_first_int(value: object) -> int | None:
     return int(m.group(1).replace(",", "")) if m else None
 
 
+# NSE writes the rupee prefix as "Rs.", "Rs", "Re." (one rupee, also used for any face value on some pages), "₹" or "INR"
+RUPEE = r"(?:₹|\bRs\.?|\bRe\.?(?=\s?\d)|\bINR)"  # "Re" only before a number: it must not match inside "fresh" or "share"
+
+
 def parse_rupees_per_share(value: object) -> float | None:
-    """'Rs. 10 per Equity Share' -> 10.0."""
+    """'Rs. 10 per Equity Share' / 'Re. 10 per Equity Share' / 'Re.1' / '₹ 2 each' -> float."""
     if not isinstance(value, str):
         return None
-    m = re.search(r"Rs\.?\s*(\d+(?:\.\d+)?)", value, re.IGNORECASE)
+    m = re.search(RUPEE + r"\s*(\d+(?:\.\d+)?)", value, re.IGNORECASE)
     return float(m.group(1)) if m else None
+
+
+def parse_issue_method(value: object) -> str | None:
+    """NSE 'Issue Type': 'Book Building' -> book_built, 'Fixed Price' -> fixed_price."""
+    if not isinstance(value, str):
+        return None
+    v = value.lower()
+    if "book" in v:
+        return "book_built"
+    if "fixed" in v:
+        return "fixed_price"
+    return None
 
 
 _UNIT_TO_CRORE = {"million": 0.1, "mn": 0.1, "crore": 1.0, "crores": 1.0, "cr": 1.0, "lakh": 0.01, "lakhs": 0.01, "billion": 100.0}
 
 
-_AMOUNT = r"Rs\.? ?([\d,]+(?:\.\d+)?) ?(million|mn|crores?|cr|lakhs?|billion)"
-_SHARES = r"([\d,]+) ?equity shares"
+# a rupee amount: the unit word is required, the prefix is not ("aggregating up to 3200 million"); a unit followed by
+# "equity shares" is a share count written in lakh/crore, not rupees
+_AMOUNT = r"(?:" + RUPEE + r" ?)?(\d[\d,]*(?:\.\d+)?) ?(million|mn|crores?|cr|lakhs?|billion)\b(?! ?(?:equity )?shares)"
+_SHARES = r"(\d[\d,]*) ?(?:fresh )?equity shares"
+_FRESH = r"fresh (?:issue|offer)|(?=\d[\d,]* fresh equity shares)"
+
+
+def _component(seg: str) -> tuple[str, float] | None:
+    """('cr', amount) or ('shares', count) for one component; None when absent or ambiguous."""
+    amounts = re.findall(_AMOUNT, seg, re.IGNORECASE)
+    shares = re.findall(_SHARES, seg, re.IGNORECASE)
+    if len(amounts) == 1 and not shares:
+        num, unit = amounts[0]
+        return "cr", float(num.replace(",", "")) * _UNIT_TO_CRORE[unit.lower()]
+    if len(shares) == 1 and not amounts:
+        return "shares", float(shares[0].replace(",", ""))
+    if not amounts and not shares:
+        # NSE sometimes omits the noun ("Offer for Sale up to 7,14,000"): a bare count with no rupee marker is shares
+        bare = [n for n in re.findall(r"(?<![\d.])(\d{1,3}(?:,\d{2,3})+|\d{4,})(?![\d.])", seg) if not re.search(RUPEE, seg, re.IGNORECASE)]
+        if len(bare) == 1:
+            return "shares", float(bare[0].replace(",", ""))
+    return None
 
 
 def parse_issue_components(text: object) -> dict[str, float] | None:
     """Fresh-issue and offer-for-sale components from the NSE issue-size sentence.
 
-    Text in parentheses (anchor, market-maker, employee or shareholder portions) describes
-    portions *included* in the totals, so it is removed before parsing. Returns a dict with
-    any of ``fresh_cr``, ``fresh_shares``, ``ofs_cr``, ``ofs_shares``, or None when the
-    sentence does not have a recognised structure.
+    Text in parentheses (anchor, market-maker, employee or shareholder portions) describes portions *included* in the
+    totals, so it is removed before parsing. Returns a dict with any of ``fresh_cr``, ``fresh_shares``, ``ofs_cr``,
+    ``ofs_shares`` — or ``total_cr`` / ``total_shares`` when the sentence states only the whole issue ("Initial Public
+    Offer of 16,98,000 Equity Shares") — or None when the structure is not recognised or a component is ambiguous.
     """
     if not isinstance(text, str) or not text.strip():
         return None
@@ -109,25 +146,32 @@ def parse_issue_components(text: object) -> dict[str, float] | None:
     for _ in range(3):  # strip (possibly nested) parentheticals
         t = re.sub(r"\([^()]*\)", " ", t)
     low = t.lower()
-    i_fresh, i_ofs = low.find("fresh issue"), low.find("offer for sale")
+    m_fresh = re.search(_FRESH, low)
+    i_fresh, i_ofs = (m_fresh.start() if m_fresh else -1), low.find("offer for sale")
+    out: dict[str, float] = {}
     if i_fresh < 0 and i_ofs < 0:
-        return None
+        # whole issue only: shares (and possibly the rupee total) of "an initial public offer/offering/issue of ..."
+        m = re.search(r"public (?:offer|offering|issue)\b(.*)", low)
+        if not m:
+            return None
+        seg = m.group(1)
+        shares = re.findall(_SHARES, seg, re.IGNORECASE)
+        amounts = re.findall(_AMOUNT, seg, re.IGNORECASE)
+        if len(shares) == 1:
+            out["total_shares"] = float(shares[0].replace(",", ""))
+        if len(amounts) == 1:
+            out["total_cr"] = float(amounts[0][0].replace(",", "")) * _UNIT_TO_CRORE[amounts[0][1].lower()]
+        return out if out and len(shares) <= 1 and len(amounts) <= 1 else None
     parts: dict[str, str] = {}
     if i_fresh >= 0:
         parts["fresh"] = low[i_fresh: i_ofs if i_ofs > i_fresh else len(low)]
     if i_ofs >= 0:
         parts["ofs"] = low[i_ofs: i_fresh if i_fresh > i_ofs else len(low)]
-    out: dict[str, float] = {}
     for name, seg in parts.items():
-        amounts = re.findall(_AMOUNT, seg, re.IGNORECASE)
-        shares = re.findall(_SHARES, seg, re.IGNORECASE)
-        if len(amounts) == 1 and not shares:
-            num, unit = amounts[0]
-            out[f"{name}_cr"] = float(num.replace(",", "")) * _UNIT_TO_CRORE[unit.lower()]
-        elif len(shares) == 1 and not amounts:
-            out[f"{name}_shares"] = float(shares[0].replace(",", ""))
-        else:
-            return None  # ambiguous: several amounts or both units in one component
+        c = _component(seg)
+        if c is None:
+            return None  # ambiguous: several amounts, both units in one component, or nothing recognisable
+        out[f"{name}_{c[0]}"] = c[1]
     return out
 
 

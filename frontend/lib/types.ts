@@ -89,6 +89,9 @@ export interface IpoSummary {
   final_issue_price: number | null;
   lot_size: number | null;
   min_investment_inr: number | null;
+  face_value?: number | null;
+  promoter_holding_pre_pct?: number | null;
+  promoter_holding_post_pct?: number | null;
   issue_size_cr: number | null;
   fresh_issue_cr: number | null;
   ofs_cr: number | null;
@@ -196,6 +199,23 @@ export interface DocumentInfo {
   file_url?: string | null;
 }
 
+export type IssueFactUnit = "text" | "inr" | "inr_range" | "cr" | "shares" | "pct" | "x" | "list" | "url" | "split";
+
+/** One key issue fact with its source and status, or the reason it is missing (GET /api/ipos/{id} → issue_facts). */
+export interface IssueFact {
+  key: string;
+  label: string;
+  value: number | string | string[] | number[] | { fresh_cr: number | null; ofs_cr: number | null; fresh_shares?: number | null; ofs_shares?: number | null } | null;
+  unit: IssueFactUnit;
+  status: "verified" | "estimated" | "derived" | "unverified" | "unavailable" | "pending" | string;
+  source?: string | null;
+  basis?: string | null;
+  page?: number | null;
+  document_id?: number | null;
+  url?: string | null;
+  reason: string | null;
+}
+
 export interface IpoDetail extends IpoSummary {
   description: string | null;
   business_model: string | null;
@@ -203,12 +223,15 @@ export interface IpoDetail extends IpoSummary {
   website: string | null;
   customer_concentration_pct: number | null;
   face_value: number | null;
+  isin: string | null;
+  issue_method: "book_built" | "fixed_price" | null;
+  listing_exchanges: string | null;
   pre_issue_shares: number | null;
   post_issue_shares: number | null;
   dilution_pct: number | null;
   promoter_holding_pre_pct: number | null;
   promoter_holding_post_pct: number | null;
-  use_of_proceeds: { purpose: string; amount_cr: number }[] | null;
+  use_of_proceeds: { purpose: string; amount_cr: number | null }[] | null;
   risk_disclosures_reviewed: boolean;
   research_notes: string | null;
   registrar: string | null;
@@ -227,6 +250,7 @@ export interface IpoDetail extends IpoSummary {
     lender_kpis?: Omit<DocumentFact, "value"> & { value: Record<string, { label: string; values_as_printed: string[]; page: number; note: string }> };
   };
   classification: Classification | null;
+  issue_facts?: IssueFact[];
   watchlisted: boolean;
   can_edit: boolean;
   scores: ScoreSummary;

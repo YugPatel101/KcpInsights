@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.ingestion import normalizer as nz
 from app.ingestion.source_registry import authority_of
-from app.ingestion.sources.base import IssueRecord, ListingPriceRecord, SubscriptionRecord
+from app.ingestion.sources.base import IssueRecord, ListingPriceRecord, ShareholdingRecord, SubscriptionRecord
 from app.models import (
     Company,
     DataMode,
@@ -49,6 +49,8 @@ FIELD_MAP = {
     "offer_document_url": "offer_document_url",
     "basis_of_price_url": "basis_of_price_url",
     "issue_size_text": "issue_size_text",
+    "isin": "isin",
+    "issue_method": "issue_method",
 }
 IMPORTANT_FIELDS = {
     "open_date", "close_date", "price_band_low", "price_band_high", "final_issue_price", "lot_size",
@@ -242,6 +244,18 @@ def apply_issue_size(db: Session, ipo: IPOIssue, *, source_key: str, source_url:
             stats.warnings.append(f"{ipo.company.name}: issue size in rupees left unavailable (issue-size text not in a recognised structure)")
         return
     price, price_basis = (ipo.final_issue_price, "final issue price") if ipo.final_issue_price else (ipo.price_band_high, "upper end of the price band")
+    if "total_cr" in comp or "total_shares" in comp:
+        # the sentence states only the whole issue: its size is known, the fresh/OFS split is not (left unavailable)
+        if "total_cr" in comp:
+            total, est, basis = comp["total_cr"], False, "rupee total stated in the NSE issue-size sentence"
+        elif price:
+            total, est = comp["total_shares"] * price / 1e7, price_basis != "final issue price"
+            basis = f"from the NSE issue-size sentence; {comp['total_shares']:,.0f} shares x {price_basis}"
+        else:
+            return
+        set_field(db, ipo, "issue_size_cr", round(total, 4), source_key=f"{source_key}:derived" if est else source_key, source_url=source_url,
+                  status="estimated" if est else "verified", basis=basis, now=now, stats=stats)
+        return
     values: dict[str, float] = {}
     estimated = False
     for part in ("fresh", "ofs"):
@@ -327,6 +341,36 @@ def apply_listing_price(db: Session, ipo: IPOIssue, lp: ListingPriceRecord, *, n
     return stats
 
 
+PRE_LISTING_PATTERN_DAYS = 15  # the listing-time shareholding pattern is stated as of the day before listing
+
+
+def apply_shareholding(db: Session, ipo: IPOIssue, records: list[ShareholdingRecord], *, now: datetime | None = None) -> UpsertStats:
+    """Promoter holding from the shareholding-pattern filings on NSE (SEBI LODR Regulation 31).
+
+    The pattern stated as of a date in the 15 days before listing is the one filed for listing (Regulation 31(1)(a)):
+    it is the post-issue holding and replaces any figure derived from the offer terms. The most recent filing is kept
+    separately as the current holding. Nothing is set when no filing falls in that window.
+    """
+    now = now or utcnow()
+    stats = UpsertStats()
+    if not records or ipo.listing_date is None:
+        return stats
+    window = [r for r in records if ipo.listing_date - timedelta(days=PRE_LISTING_PATTERN_DAYS) <= r.as_of <= ipo.listing_date]
+    if window:
+        r = window[-1]
+        set_field(db, ipo, "promoter_holding_post_pct", round(r.promoter_pct, 2), source_key="nse_shareholding", source_url=r.source_url,
+                  status="verified", basis=f"shareholding pattern as of {r.as_of:%d %b %Y}, filed with NSE for listing", now=now, stats=stats)
+    latest = records[-1]
+    facts = dict(ipo.document_facts or {})
+    facts["shareholding_latest"] = {"value": latest.promoter_pct, "public_pct": latest.public_pct, "as_of": latest.as_of.isoformat(),
+                                    "page": None, "text": "", "basis": "latest shareholding pattern filed with NSE", "document_id": None,
+                                    "source_url": latest.source_url, "read_at": now.isoformat()}
+    if facts != (ipo.document_facts or {}):
+        ipo.document_facts = facts
+        stats.changed_ipo_ids.add(ipo.id)
+    return stats
+
+
 def field_provenance(db: Session, ipo_id: int) -> dict[str, dict[str, Any]]:
     """Latest applied observation per field, plus conflict flags."""
     out: dict[str, dict[str, Any]] = {}
@@ -336,8 +380,11 @@ def field_provenance(db: Session, ipo_id: int) -> dict[str, dict[str, Any]]:
         if o.conflict:
             entry["conflicts"] += 1
         if o.applied:
+            value = json.loads(o.value) if o.value else None
+            if entry.get("source_key") and entry.get("value") == value and authority_of(o.source_key) < authority_of(entry["source_key"]):
+                continue  # the same value from a lower-authority source (e.g. a derivation) corroborates; it does not replace the citation
             entry.update({
-                "value": json.loads(o.value) if o.value else None,
+                "value": value,
                 "source_key": o.source_key,
                 "source_url": o.source_url,
                 "first_seen_at": o.observed_at.isoformat(),

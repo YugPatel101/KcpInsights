@@ -37,9 +37,10 @@ from app.config import get_settings
 from app.financials.disclosures import extract_disclosures, parse_peers
 from app.financials.industry import classify_industry, lender_kpis
 from app.financials.ocr import OcrDocument, image_only_pages, tesseract_available
+from app.financials.offer_terms import extract_offer_terms
 from app.financials.statement_parser import PARSER_VERSION, ExtractionResult, extract_financials
 from app.ingestion import normalizer as nz
-from app.ingestion.financial_store import StoreStats, store_classification, store_facts, store_peers, store_statements
+from app.ingestion.financial_store import StoreStats, store_classification, store_facts, store_offer_terms, store_peers, store_statements
 from app.ingestion.http import PoliteClient, SourceError
 from app.ingestion.sources.sebi import SEBI_HOSTS, Filing, SEBIFilingsSource
 from app.models import Company, DataMode, DocumentExtraction, IPOIssue, SourceDocument, utcnow
@@ -355,12 +356,14 @@ def process(db: Session, doc: SourceDocument, *, rescore: bool = True) -> dict[s
                 method = "text+ocr" if ocr_pages else "text"
             peers = parse_peers(pdf, texts, ipo.company.name)
             facts = extract_disclosures(pdf, texts)
+            terms = extract_offer_terms(texts)
             industry = classify_industry(texts, ipo.company.name)
             kpis = lender_kpis(pdf, texts) if industry.profile in ("lender", "insurer") else {}
         stats = StoreStats()
         store_statements(db, ipo, doc, result, stats, ocr_pages=ocr_pages)
         store_peers(db, ipo, doc, peers, stats)
         store_facts(db, ipo, doc, facts, stats)
+        store_offer_terms(db, ipo, doc, terms, stats)
         store_classification(db, ipo, doc, industry, kpis, stats)
         doc.extraction_method = method
         warnings = list(result.warnings) + (peers.warnings if peers else ["listed-peer comparison table not found"])
@@ -395,6 +398,39 @@ def process(db: Session, doc: SourceDocument, *, rescore: bool = True) -> dict[s
         db.commit()
         log.warning("document %s extraction failed: %s", doc.id, doc.extraction_error)
         return {"document_id": doc.id, "status": "failed", "error": doc.extraction_error}
+
+
+def best_document(db: Session, ipo: IPOIssue) -> SourceDocument | None:
+    """The stored offer document to read issue terms from: an RHP before a DRHP, the NSE copy before SEBI's, newest first."""
+    docs = db.execute(select(SourceDocument).where(SourceDocument.ipo_id == ipo.id, SourceDocument.source_key.in_(DOC_SOURCES),
+                                                   SourceDocument.original_retained.is_(True),
+                                                   SourceDocument.extraction_status.in_(("extracted", "partial", "not_found")))).scalars().all()
+    usable = [d for d in docs if document_path(d) is not None]
+    return min(usable, key=lambda d: (DOC_SOURCES.index(d.source_key or "nse_rhp"), -d.id)) if usable else None
+
+
+def reread_offer_terms(db: Session, ipo: IPOIssue) -> bool:
+    """Re-read share capital and offer terms from the stored offer document (text layer only, no network requests).
+
+    Used when the offer-terms extractor changes, so every IPO with a stored document gets the improvement without
+    downloading or re-parsing its financial statements.
+    """
+    import pymupdf
+
+    doc = best_document(db, ipo)
+    path = document_path(doc) if doc is not None else None
+    if doc is None or path is None:
+        return False
+    with pymupdf.open(path) as pdf:
+        if pdf.page_count > MAX_PAGES:
+            return False
+        texts = [p.get_text() for p in pdf]
+        facts = extract_disclosures(pdf, texts)
+        terms = extract_offer_terms(texts)
+    stats = StoreStats()
+    store_facts(db, ipo, doc, facts, stats)
+    store_offer_terms(db, ipo, doc, terms, stats)
+    return True
 
 
 def _ocr_extract(pdf: Any, scanned: list[int], text_result: ExtractionResult) -> tuple[ExtractionResult, set[int], str]:

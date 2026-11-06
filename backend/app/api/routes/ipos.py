@@ -37,6 +37,7 @@ from app.services.ipo_service import (
     serialize_ipo_summary,
     serialize_statements,
 )
+from app.services.issue_facts import issue_facts
 
 router = APIRouter(prefix="/api/ipos", tags=["ipos"])
 
@@ -195,6 +196,7 @@ def ipo_detail(ipo_id: int, db: Session = Depends(get_db), ctx: AuthContext | No
     ipo = _load(db, ipo_id)
     out = serialize_ipo_detail(ipo)
     out["scores"] = score_summary(score_ipo(db, ipo))
+    out["issue_facts"] = issue_facts(db, ipo)
     from app.api.routes.data import _doc_out
 
     out["documents"] = [_doc_out(d) for d in db.execute(select(SourceDocument).where(SourceDocument.ipo_id == ipo_id)

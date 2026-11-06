@@ -12,7 +12,8 @@ const FACT_LABEL: Record<string, string> = {
 };
 
 export default function RiskPanel({ d, r }: { d: IpoDetail; r: ScoreResult }) {
-  const facts = Object.entries(d.document_facts ?? {}).filter(([k]) => k !== "lender_kpis" && k !== "business_overview");
+  // only the risk disclosures; offer terms (promoters, objects, website, …) are shown on the overview
+  const facts = Object.entries(d.document_facts ?? {}).filter(([k]) => k in FACT_LABEL);
   const gov = r.risk.governance_disclosure;
   const kinds = ["disclosed fact", "derived from financials", "derived from issue terms", "data quality"] as const;
   return (

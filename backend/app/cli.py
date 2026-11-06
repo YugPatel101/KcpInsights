@@ -154,6 +154,32 @@ def cmd_backfill_history(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fill_gaps(a: argparse.Namespace) -> int:
+    """Fill missing issue data for every IPO now, with the scheduler's own jobs and request discipline.
+
+    Stored offer documents are re-read (no requests); NSE issue details are re-fetched for every issue still missing an
+    NSE-published field; face value and ISIN come from NSE's listed-equity lists and the post-issue promoter holding from
+    the shareholding pattern filed with NSE. Requests stay one at a time per host, at least 2.5 s apart.
+    """
+    from app.config import get_settings
+    from app.ingestion.financial_store import refresh_derived
+    from app.ingestion.ingestion_scheduler import get_runner
+    from app.models import IPOIssue
+
+    s = get_settings()
+    s.ingest_max_detail_fetches_per_run = s.ingest_max_shareholding_per_run = s.ingest_max_offer_term_rereads_per_run = 10_000
+    s.details_recheck_days = a.recheck_days
+    db = _db()
+    ids = set(db.execute(select(IPOIssue.id).where(IPOIssue.data_mode == "source")).scalars())
+    print(f"derived     re-applied for {len(ids)} issues, {len(refresh_derived(db, ids))} changed")
+    db.close()
+    for job in ("details", "enrichment"):
+        r = get_runner().run(job, "cli")
+        print(f"{job:<11} {r['status']:<8} fields_changed={r['fields_changed']} requests={r['requests_made']} errors={len(r['errors'])} "
+              f"detail={json.dumps({k: v for k, v in r['detail'].items() if k not in ('owner', 'warnings', 'rescored')})}")
+    return 0
+
+
 def cmd_e2e_demo(a: argparse.Namespace) -> int:
     from app.cli_e2e import run_e2e
 
@@ -241,6 +267,10 @@ def main(argv: list[str] | None = None) -> int:
                    choices=["all", "discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "health"])
     p.set_defaults(fn=cmd_sync)
     sub.add_parser("reclassify", help="re-run the industry classifier over stored offer documents, then rescore").set_defaults(fn=cmd_reclassify)
+    p = sub.add_parser("fill-gaps", help="fill missing issue data for every IPO now (offer documents, NSE details, equity lists, "
+                       "shareholding filings)")
+    p.add_argument("--recheck-days", type=int, default=0, help="skip issues whose NSE details were checked within this many days")
+    p.set_defaults(fn=cmd_fill_gaps)
     sub.add_parser("refresh-scores", help="recompute stored scores and completeness for every IPO (rows added only on change)").set_defaults(
         fn=cmd_refresh_scores)
     p = sub.add_parser("process-documents", help="download and extract queued offer documents now (still one request at a time)")

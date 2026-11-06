@@ -181,7 +181,8 @@ def sync_status(db: Session = Depends(get_db), limit: int = Query(30, ge=1, le=2
         "scheduler": scheduler_status(),
         "intervals_minutes": {"discover": s.ingest_discovery_minutes, "details": s.ingest_details_minutes, "subscriptions": s.ingest_subscription_minutes,
                               "listings": s.ingest_listing_minutes, "health": s.ingest_health_minutes, "documents": s.ingest_documents_minutes,
-                              "filings": s.ingest_filings_minutes, "peers": s.ingest_peer_prices_minutes},
+                              "filings": s.ingest_filings_minutes, "peers": s.ingest_peer_prices_minutes,
+                              "enrichment": s.ingest_enrichment_minutes},
         "jobs": [{"id": j.id, "job_type": j.job_type, "trigger": j.trigger, "status": j.status, "started_at": j.started_at.isoformat(),
                   "finished_at": j.finished_at.isoformat() if j.finished_at else None, "records_discovered": j.records_discovered,
                   "records_created": j.records_created, "records_updated": j.records_updated, "fields_changed": j.fields_changed,
@@ -192,7 +193,7 @@ def sync_status(db: Session = Depends(get_db), limit: int = Query(30, ge=1, le=2
 
 
 class SyncIn(BaseModel):
-    job: Literal["all", "discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "health"] = "all"
+    job: Literal["all", "discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "enrichment", "health"] = "all"
 
 
 @router.post("/admin/data-sync", status_code=202)

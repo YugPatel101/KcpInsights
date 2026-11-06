@@ -24,7 +24,8 @@ from app.services.field_registry import FIELDS, GROUP_WEIGHTS, GROUPS, FieldSpec
 COUNTED_AS = {"available": 1.0, "not_meaningful": 1.0, "estimated": 0.5, "unverified": 0.5, "requires_review": 0.25, "unavailable": 0.0}
 SOURCE_LABEL = {"nse_ipo": "NSE", "nse_ipo:derived": "Derived from NSE data", "nse_bhavcopy": "NSE bhavcopy", "nse_rhp": "NSE RHP",
                 "nse_rhp:derived": "Derived from RHP", "sebi_rhp": "SEBI RHP", "sebi_drhp": "SEBI DRHP", "user_import": "User import",
-                "demo": "Synthetic demo", "manual_verified": "Manual (verified)"}
+                "demo": "Synthetic demo", "manual_verified": "Manual (verified)", "nse_equity_list": "NSE listed-equity list",
+                "nse_shareholding": "NSE shareholding pattern"}
 DOC_SOURCE = {"nse_rhp": "NSE RHP archive", "sebi_rhp": "SEBI red herring filing", "sebi_drhp": "SEBI draft (DRHP) filing"}
 
 
@@ -179,6 +180,15 @@ def compute_completeness(db: Session, ipo: IPOIssue, result: dict[str, Any], cfg
                                              reason=c.get("note") or doc_reason or "NSE publishes no sector; the offer document has not been classified yet"))
             elif k == "listing_price":
                 states.append(from_obs(spec, ipo.listing_price))
+            elif k in ("promoters", "objects_of_issue"):
+                f = facts.get(k) or {}
+                items: list[Any] | None = f.get("value") if k == "promoters" else (f.get("value") or ipo.use_of_proceeds)
+                ok = items is not None and (items != [] or k == "promoters")
+                shown = (", ".join(items or []) or "no identifiable promoter") if k == "promoters" else len(items or [])
+                states.append(FieldState(k, spec.label, "issue", "available" if ok else "unavailable", value=shown if ok else None,
+                                         unit="objects" if k == "objects_of_issue" and ok else None,
+                                         source=f"Offer document p{f['page']}" if ok and f.get("page") else ("Import" if ok else None),
+                                         reason=None if ok else (doc_reason or "not found in a readable form in the offer document")))
             elif k == "business_overview":
                 bo = facts.get("business_overview") or {}
                 text = bo.get("value") or ipo.company.description
@@ -248,9 +258,15 @@ def compute_completeness(db: Session, ipo: IPOIssue, result: dict[str, Any], cfg
                                          source=f"Offer document p{f.get('page')}" if ok else None, period=f.get("basis"),
                                          reason=None if ok else (doc_reason or "not found in a readable form in the offer document")))
             elif k == "promoter_holding":
-                ph = ipo.promoter_holding_post_pct or ipo.promoter_holding_pre_pct
-                states.append(FieldState(k, spec.label, "risk", "available" if ph is not None else "unavailable", value=ph, unit="%",
-                                         reason=None if ph is not None else spec.fallback))
+                post = ipo.promoter_holding_post_pct is not None
+                ph = ipo.promoter_holding_post_pct if post else ipo.promoter_holding_pre_pct
+                o = prov.get("promoter_holding_post_pct" if post else "promoter_holding_pre_pct") or {}
+                states.append(FieldState(k, spec.label, "risk", ("estimated" if o.get("data_status") == "estimated" else "available") if ph is not None
+                                         else "unavailable", value=ph, unit="%", period="after the issue" if post else "before the issue" if ph is not None else None,
+                                         source=SOURCE_LABEL.get(o.get("source_key", ""), o.get("source_key")) if ph is not None else None,
+                                         data_status=o.get("data_status"),
+                                         reason=None if ph is not None else (doc_reason or "no shareholding pattern found in a readable form in the offer "
+                                                                             "document; after listing it comes from the pattern filed with NSE")))
             else:
                 states.append(FieldState(k, spec.label, "risk", "unavailable", reason=spec.fallback))
         elif spec.group == "verification":

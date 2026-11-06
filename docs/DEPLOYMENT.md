@@ -67,6 +67,9 @@ and has a health check on `/api/health`. Mount `/app/data` on a persistent volum
 | `INGEST_SEBI_FILINGS` | true | SEBI DRHP/RHP discovery |
 | `DOCUMENTS_MAX_TOTAL_MB` | 1500 | originals beyond this are pruned (extracted data kept) |
 | `DOCUMENT_MAX_ATTEMPTS` | 5 | retries before a document becomes a dead letter |
+| `DETAILS_RECHECK_DAYS` | 7 | how often an issue still missing an NSE-published field is re-checked |
+| `INGEST_ENRICHMENT_MINUTES` | 360 | gap-filling job: equity lists, shareholding filings, offer-term re-reads |
+| `INGEST_MAX_SHAREHOLDING_PER_RUN`, `INGEST_MAX_OFFER_TERM_REREADS_PER_RUN` | 15, 10 | per-run limits of that job |
 | `OCR_ENABLED`, `OCR_MAX_PAGES`, `OCR_DPI`, `OCR_TIME_BUDGET_SECONDS` | true, 150, 300, 600 | local OCR limits |
 | `MAX_UPLOAD_MB`, `MAX_PDF_PAGES` | 20, 600 | upload limits |
 | `LOG_FORMAT` | text | `json` writes one JSON object per log line (time, level, logger, message), redaction unchanged |
@@ -83,6 +86,7 @@ Frontend: `KCP_API_URL` (where `/api/*` is proxied).
 | Catch up on queued prospectuses | `.venv/bin/python -m app.cli process-documents --limit 20` |
 | Import a year of listed issues and listing prices | `.venv/bin/python -m app.cli backfill-history --days 365` |
 | Re-run the industry classifier | `.venv/bin/python -m app.cli reclassify` |
+| Fill every missing issue field now (NSE details, offer terms, equity lists, shareholding filings) | `.venv/bin/python -m app.cli fill-gaps` |
 | Recompute stored scores | `.venv/bin/python -m app.cli refresh-scores` |
 | End-to-end demonstration | `.venv/bin/python -m app.cli e2e-demo BCSSL --report ../docs/E2E_DEMONSTRATION.md` |
 | Backup | `sqlite3 data/kcpinsights.db ".backup data/backup.db"` (never copy the live file) |
