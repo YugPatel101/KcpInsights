@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from typing import Any
 
 from app.financials.disclosures import Disclosure
 from app.financials.statement_parser import UNIT_TO_CRORE, detect_unit
 
-EXTRACTOR_VERSION = "1.1"
+EXTRACTOR_VERSION = "1.2"
 
 _WS = re.compile(r"\s+")
 _RS = r"(?:₹|`|Rs\.?|Re\.?|INR)\s?"  # "`" is how PDFs set in the Rupee Foradian font encode ₹
@@ -170,14 +171,18 @@ def post_issue_shares(texts: list[str]) -> Disclosure | None:
 
 # ---------------------------------------------------------------------------- shareholding pattern
 _PROMOTER = _fz("Promoter")
-_A_ROW = re.compile(r"\(A\)\s?" + _PROMOTER + r"\s?s?\s?(?:and|&)\s?" + _PROMOTER + r"\s?" + _fz("Group")
-                    + r"(.{0,500}?)\(B\)\s?" + _fz("Public") + r"(.{0,300}?)(?:\(C\)|\bC\b|Total|$)", re.I)
+# the promoter row of the shareholding pattern, up to the public row ("(A)"/"A" and "(B)"/"B" markers; words may be split)
+_A_ROW = re.compile(r"(?:\(A\)|\bA\b)?\s?" + _PROMOTER + r"\s?s?\s?(?:and|&)\s?" + _PROMOTER + r"\s?" + _fz("Group")
+                    + r"(.{0,500}?)(?:\(B\)|\bB\b)\s?" + _fz("Public"), re.I)
+_NEXT_ROW = re.compile(r"\(C\)|\bC\b|©|\bTotal\b")
 _A1A2 = re.compile(r"\bA1\s?" + _PROMOTER + r"s?\b(.{0,200}?)\bA2\s?" + _PROMOTER + r"\s?" + _fz("Group") + r"(.{0,200}?)\bB\s?" + _fz("Public")
                    + r"(.{0,200}?)(?:\bC\b|Total|$)", re.I)
 _PCT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{1,4})?)\s?%|(?<![\d,.])(\d{1,3}\.\d{1,4})(?![\d,])")
 
 
 def _first_pct(seg: str) -> float | None:
+    # narrow table columns split a percentage's last digit onto the next text fragment: "70.7 9" is 70.79, "83.6 2%" is 83.62
+    seg = re.sub(r"(?<![\d,.])(\d{1,3}\.\d) (\d)(?=\s?%|\s|$)(?![\d,.])", r"\1\2", seg)
     m = _PCT.search(seg)
     if not m:
         return None
@@ -197,16 +202,22 @@ def promoter_holding_pre(texts: list[str]) -> Disclosure | None:
     row is empty.
     """
     best: tuple[int, Disclosure] | None = None
+    no_promoter = any(re.search(r"(?:does not have|no) (?:an )?identifiable promoters?", _flat(t), re.I) for t in texts[:300])
     for i, t in enumerate(texts[:300]):
         flat = _flat(t)
         cands: list[tuple[float | None, float | None, str, int, int]] = []
         for m in _A_ROW.finditer(flat):
-            a, b = _first_pct(m.group(1)), _first_pct(m.group(2))
-            if a is None and re.fullmatch(r"[\s\-–—]*", m.group(1)) and b is not None:
-                a = 0.0  # the promoter row is blank: the company has no promoter shareholding
-            elif a is None and re.search(r"(?<![\d,.])100(?![\d,.])", m.group(1)) and _no_figures(m.group(2)):
+            pub = flat[m.end(): m.end() + 300]
+            nxt = _NEXT_ROW.search(pub)
+            pub = pub[: nxt.start()] if nxt else pub
+            a, b = _first_pct(m.group(1)), _first_pct(pub)
+            if a is None and re.fullmatch(r"[\s\-–—]*", m.group(1)) and no_promoter:
+                a = 0.0  # a blank promoter row, and the document states there is no identifiable promoter
+                cands.append((a, None, m.group(0), m.start(), m.end()))
+                continue
+            if a is None and re.search(r"(?<![\d,.])100(?![\d,.])", m.group(1)) and _no_figures(pub):
                 a = 100.0  # '100' printed without decimals or %, nothing held by the public
-            cands.append((a, b, m.group(0), m.start(), m.end()))
+            cands.append((a, b, m.group(0) + pub, m.start(), m.end() + len(pub)))
         for m in _A1A2.finditer(flat):
             a1, a2, b = _first_pct(m.group(1)), _first_pct(m.group(2)), _first_pct(m.group(3))
             if a1 is not None:
@@ -215,14 +226,14 @@ def promoter_holding_pre(texts: list[str]) -> Disclosure | None:
             if a is None:
                 continue
             if b is None:
-                ok, rank = a >= 99.9, 2
+                ok, rank = a >= 99.9 or (a == 0.0 and no_promoter), 2
             else:
                 total = a + b
                 ok, rank = (abs(total - 100) <= 0.6, 3) if abs(total - 100) <= 0.6 else (90 <= total <= 100.6, 1)
             if not ok:
                 continue
-            basis = (f"shareholding pattern before the issue: promoter and promoter group {a:g}%"
-                     + (f", public {b:g}%" if b is not None else ", public nil"))
+            basis = ("shareholding pattern: the promoter row is blank and the company has no identifiable promoter" if a == 0.0 and b is None else
+                     f"shareholding pattern before the issue: promoter and promoter group {a:g}%" + (f", public {b:g}%" if b is not None else ", public nil"))
             d = Disclosure("promoter_holding_pre_pct", a, i + 1, flat[max(0, s - 60): min(len(flat), e)][:400], basis)
             if best is None or rank > best[0]:
                 best = (rank, d)
@@ -232,10 +243,12 @@ def promoter_holding_pre(texts: list[str]) -> Disclosure | None:
 
 
 # ---------------------------------------------------------------------------- objects of the issue
-_INTRO = re.compile(r"(?:net proceeds|proceeds (?:from|of) the (?:fresh )?(?:issue|offer))[^.]{0,80}?(?:are|is) proposed to be "
-                    r"(?:utili[sz]ed|used|deployed|applied)[^:]{0,200}?(?::|below|follows)", re.I)
-_ITEM = re.compile(r"(?:^|\s)(?:\((?:[ivx]{1,4}|[a-h]|\d{1,2})\)|(?:[ivx]{1,4}|[a-h]|\d{1,2})[.)])\s+")
-_AMT = r"(?:\d{1,3}(?:,\d{2,3})*\.\d{1,2}|\[●\]|\[•\])"
+_INTRO = re.compile(
+    r"(?:(?:net (?:fresh )?(?:issue |offer )?proceeds|(?:fresh )?(?:issue|offer) proceeds|proceeds (?:from|of) the (?:fresh )?(?:issue|offer))"
+    r"[^.]{0,80}?(?:are|is|will be) proposed to be (?:utili[sz]ed|used|deployed|applied)"
+    r"|(?:we|our company) (?:proposes?|intends?) to (?:utili[sz]e|use|deploy|apply) the net proceeds)[^:]{0,200}?(?::|below|follows)", re.I)
+_ITEM = re.compile(r"(?:^|\s)(?:\((?:[ivx]{1,4}|[a-h]|\d{1,2})\)|(?:[ivx]{1,4}|[a-h]|\d{1,2})[.)]|[\u2022\u25cf\u25aa\uf0b7\uf0a7•●▪])\s+")
+_AMT = r"(?:\d{1,3}(?:,\d{2,3})*\.\d{1,2}|\d{1,3}(?:,\d{2,3})+|\[●\]|\[•\]|\[\s?\])"  # '[ ]' where the ● glyph was lost
 # header cells of the utilisation table, removed before reading its rows
 _HEADER = re.compile(
     r"^(?:\s|:|\(\d\)|\*|#|\^|"
@@ -243,13 +256,46 @@ _HEADER = re.compile(
     r"Estimated (?:amount|deployment|utili[sz]ation)(?: to be deployed| of Net Proceeds)?(?: in| during)? (?:FY|Fiscal|Financial Year)"
     r"\s?\d{4}(?:\s?-\s?\d{2,4})?|Deployment (?:in|during) (?:FY|Fiscal)\s?\d{4}(?:\s?-\s?\d{2,4})?|"
     r"(?:Amount )?(?:which will be |to be |proposed to be )?(?:financed|funded|deployed|utili[sz]ed)(?: from| out of)?(?: the)? Net Proceeds|"
-    r"\((?:₹|`|Rs\.?|in ₹|in Rs\.?)[^)]{0,20}\)|Sr\.?\s?No\.?|S\.\s?No\.?|Particulars|Total estimated (?:cost|amount)|"
+    r"(?:aggregate )?(?:proposed|estimated) (?:deployment|utili[sz]ation)(?: (?:from|of) (?:the )?net proceeds)?(?: in (?:fiscal|fy)\s?\d{4}(?:\s?-\s?\d{2,4})?)?|"
+    r"\((?:amounts? in |in )?(?:₹|`|Rs\.?|inr)[^)]{0,30}\)|Sr\.?\s?No\.?|S\.\s?No\.?|Particulars|Total estimated (?:cost|amount)|"
     r"Amount(?:\s?\(\d\))?|Estimated (?:amount|cost)\*?|"
-    r"(?:% of|Percentage of) (?:the )?(?:Gross|Net) Proceeds\*?|Amount already deployed|Balance)+", re.I)
+    r"(?:% of|Percentage of) (?:the )?(?:Gross|Net)(?: (?:offer|issue|fresh issue))? Proceeds(?:\s?\(\d\))?\*?|Amount already deployed|Balance)+", re.I)
 _END = re.compile(r"(?:total|net proceeds|gross proceeds)\b", re.I)
+_PROSE = re.compile(r"proposed to be|following table|set forth|summari[sz]ed in|as approved by|resolution dated|to be finali[sz]ed", re.I)
+_SUBTOTAL = re.compile(r"^(?:\d{1,4}\s+)?sub[- ]?\s?total\b", re.I)  # a subtotal row (a page number may precede it)
+
+
+# column-header phrases of utilisation tables that can be read into the first row's text
+_HEAD_WORDS = re.compile(
+    r"particulars|estimated (?:amount|cost|utili[sz]ation|deployment)(?: of net proceeds)?|total estimated cost|"
+    r"amount(?: (?:to be|which will be|proposed to be|expected to be))? (?:funded|financed|deployed|utili[sz]ed)(?: (?:from|out of))?(?: the)? "
+    r"net (?:issue |offer |fresh issue )?proceeds(?:\s?\(\d\))?|(?:amount )?(?:deployed|incurred) (?:till|up ?to) [a-z]+ \d{1,2}, \d{4}(?:\s?\(\d\))?|"
+    r"(?:fiscal|fy)\s?20\d\d(?:\s?-\s?\d{2,4})?|\b(?:sr|s)\.?\s?no\.?|\((?:in |amount in |amounts in )?(?:₹|rs\.?|inr)?[^)]{0,25}(?:lakhs?|million|crores?)\)|"
+    r"^\d{1,4}\b", re.I)
+
+
+def _strip_head_words(s: str) -> str:
+    """Drop column-header text read into a purpose: keep what follows the last header phrase, if anything."""
+    last = None
+    for m in _HEAD_WORDS.finditer(s):
+        last = m
+    if last is None:
+        return s
+    enum = re.search(r"(?:^|\s)(?:\d{1,2}[.)]|\([a-z0-9]{1,2}\)|[a-h][.)])\s+(?=[A-Z])", s)
+    if enum and _HEAD_WORDS.search(s[: enum.start()]):
+        return s[enum.end():]  # header text, then the first enumerated object
+    rest = re.sub(r"^(?:\(\d\)|[\s:;,.()*%\-])+", "", s[last.end():])
+    rest = re.sub(r"^(?:\d{1,2}[.)]|\([a-z0-9]{1,2}\)|[a-h][.)])\s+", "", rest).strip()
+    if len(rest) >= 8 and re.match(r"[A-Z(]", rest):
+        return rest
+    residue = re.sub(r"[\W\d_]+", " ", _HEAD_WORDS.sub(" ", s)).strip()
+    return "" if len(residue) < 12 else s  # nothing but header text: not an object
 
 
 def _clean_purpose(s: str) -> str:
+    s = re.sub(r"\b(?:sr|s)\.\s?no\.?", " ", s, flags=re.I)  # "Sr. No." column header (its period is not a sentence end)
+    s = re.sub(r"^[\[\]●•\s%\-]+", "", s)  # residue of a "[●]" cell or a "%" header split across rows
+    s = _strip_head_words(s)
     s = re.split(r"\(collectively|(?<=[a-z)”\"])\.\s", s, maxsplit=1, flags=re.I)[0]
     s = re.sub(r"(?:\(\d\)|\*+|#|\^)+\s*$", "", s.strip()).strip(" ;,.:")
     s = re.sub(r"^\d{1,2}\.?\s+", "", s)
@@ -272,6 +318,8 @@ def _rows(tail: str) -> list[tuple[str, str | None]]:
             seg = body[mk.end(): marks[k + 1].start() if k + 1 < len(marks) else len(body)]
             am = re.search(_AMT, seg)
             purpose = _clean_purpose(seg[: am.start()] if am else seg)
+            if _SUBTOTAL.match(purpose) or not purpose:
+                continue
             if _END.match(purpose) or not 8 <= len(purpose) <= 400:
                 break
             rows.append((purpose, am.group(0) if am else None))
@@ -280,12 +328,40 @@ def _rows(tail: str) -> list[tuple[str, str | None]]:
         return rows
     for m in re.finditer(r"((?:(?!" + _AMT + r").){8,400}?)\s(" + _AMT + r")((?:\s(?:" + _AMT + r"|-|NA|Nil))*)", body):
         purpose = _clean_purpose(m.group(1))
-        if _END.match(purpose) or not 8 <= len(purpose) <= 400 or re.search(r"proposed to be|following table|set forth", purpose, re.I):
+        if _SUBTOTAL.match(purpose):
+            continue
+        if not purpose:
+            continue  # a header-only row
+        if _END.match(purpose) or not 8 <= len(purpose) <= 400 or _PROSE.search(purpose):
             break
         rows.append((purpose, m.group(2)))
         if re.search(r"general corporate", purpose, re.I) or len(rows) >= 12:
             break
     return rows
+
+
+_OFS_OBJECTS = re.compile(r"the objects of the (?:offer|issue) (?:are|is) (?:to )?:?\s*(.{20,700}?stock exchanges?)\b", re.I)
+
+
+def _ofs_objects(texts: list[str]) -> Disclosure | None:
+    """An offer for sale only: 'The objects of the Offer are to (i) carry out the Offer for Sale ... and (ii) achieve the
+    benefits of listing ...' — the company receives no proceeds, which is the answer for such issues."""
+    for i, t in enumerate(texts[20:], start=20):
+        flat = _flat(t)
+        m = _OFS_OBJECTS.search(flat)
+        if not m or "offer for sale" not in m.group(1).lower():
+            continue
+        items = [_clean_purpose(x) for x in re.split(r"\((?:i|ii|iii|iv|a|b|c)\)|;\s*and\s|\band\b(?=\s+(?:to\s+)?achieve)", m.group(1)) if x.strip()]
+        items = [x for x in items if len(x) >= 8]
+        if not items:
+            continue
+        rows: list[dict[str, Any]] = []
+        for it in items:
+            amt = re.search(r"aggregating (?:up )?to " + _RS + r"([\d,]+(?:\.\d+)?) ?(million|crores?|lakhs?)", it, re.I)
+            factor = UNIT_TO_CRORE.get(detect_unit("₹ in " + amt.group(2)) or "") if amt else None
+            rows.append({"purpose": it, "amount_cr": round(float(amt.group(1).replace(",", "")) * factor, 4) if amt and factor else None})
+        return Disclosure("objects_of_issue", rows, i + 1, m.group(0)[:400], "offer for sale only: the company receives no proceeds")
+    return None
 
 
 def objects_of_issue(texts: list[str]) -> Disclosure | None:
@@ -295,9 +371,18 @@ def objects_of_issue(texts: list[str]) -> Disclosure | None:
     numbered list ending with general corporate purposes, or the utilisation table (purpose, amount) up to its total row.
     Amounts are converted from the unit printed above the table; '[●]' (not yet determined) stays None.
     """
+    listed: list[Disclosure] = []  # readings without amounts, kept in case no table with amounts follows
+
+    def same_objects(found: Disclosure) -> bool:
+        """A later table belongs to the same objects as a list already read when they share a purpose."""
+        if not listed:
+            return True
+        keys = {str(r["purpose"])[:20].lower() for r in listed[0].value}
+        return any(str(r["purpose"])[:20].lower() in keys for r in found.value)
+
     for i, t in enumerate(texts):
         if i < 20:
-            continue  # skip the table of contents, definitions and the offer-document summary
+            continue  # skip the table of contents and definitions
         flat = _flat(t)
         context = flat + " " + (_flat(texts[i - 1]) if i else "")
         if not re.search(r"objects of the (?:issue|offer)", context, re.I):
@@ -316,9 +401,14 @@ def objects_of_issue(texts: list[str]) -> Disclosure | None:
                 cells = [(p, table.get(p[:30].lower())) for p, _ in cells]
             rows = [{"purpose": p, "amount_cr": round(float(a.replace(",", "")) * factor, 4) if a and factor and a[0].isdigit() else None}
                     for p, a in cells]
-            return Disclosure("objects_of_issue", rows, i + 1, flat[m.start(): m.end() + 300][:400],
-                              f"objects as listed by the company; amounts as printed ({unit})" if factor else "objects as listed by the company")
-    return None
+            found = Disclosure("objects_of_issue", rows, i + 1, flat[m.start(): m.end() + 300][:400],
+                               f"objects as listed by the company; amounts as printed ({unit})" if factor else "objects as listed by the company")
+            if any(r["amount_cr"] is not None for r in rows):
+                if same_objects(found):
+                    return found
+                continue
+            listed.append(found)
+    return listed[0] if listed else _ofs_objects(texts)
 
 
 def extract_offer_terms(texts: list[str]) -> dict[str, Disclosure]:

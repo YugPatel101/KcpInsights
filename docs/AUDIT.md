@@ -127,6 +127,40 @@ Coverage of the 140 real IPOs (121 announced by NSE, 112 listed), before → aft
 | P/E shown on the issue page | 11 / 140 | **66 / 140** (pre-issue EPS), **77 / 140** (market cap ÷ PAT) | 24–28 of these from statements read but not reconciled — labelled *unverified*, never scored; 19 pipeline; the rest lack readable statements or EPS |
 | Average completeness | 49.3% (55 fields) | **57.1%** (60 fields) | — |
 
+## Precision and operations round (7 Nov 2026)
+
+| # | Sev | Finding | Evidence | Fix |
+|---|---|---|---|---|
+| F7 | H | Summary tables chosen over the restated statements, and a P&L and cash flow taken from different sets | Candidates ranked by row count with ties to the earliest page (the summary); BLS Polymers: balance sheet p88 and cash flow p90 (summary) with the P&L p332 (restated) — their profit before tax disagreed | candidates ranked by their own reconciliation; cash flow paired with the P&L on profit before tax; up to 60 title pages examined (was 20) |
+| F8 | H | A sign lost in a summary table was stored as verified | Swastika Infra FY2025 operating cash flow +₹76.5 cr (summary p81) vs −₹76.5 cr in the restated cash flow (p273) and two other pages | the restated statement now wins on reconciliation |
+| F9 | M | Common layouts left periods unverified | tax printed only as current + deferred (≈74 statements); "Total Equity & Liability"; "Total non - current assets"; "Total Profit for the year"; "Sub-Total"/bare "TOTAL" sections; "Total (1+2+3+4)"; headings printed after the table in the text stream; "Less:/Add:" prefixes | patterns and section logic in `statement_parser.py` 1.6; tax summed from its printed lines (counts only when PAT reconciles) |
+| F11 | H | Consolidated total equity read without non-controlling interests | "Total equity attributable to equity holders of the Holding Company" matched before the "Total equity" line (documents 41, 49, 55, …): equity + liabilities ≠ assets in 8 periods, and 6 verified periods carried equity up to 1.3% low | the plain total wins; the owners' share is used only when no total is printed (parser 1.7: 311 → 324 verified periods on the corpus) |
+| F10 | M | Subtotal check failed balance sheets that balance | printed current + non-current assets can leave out a group (assets held for sale) | `assets_add_up` is a soft check |
+| D21 | M | Objects of the issue read for 76 of 139 prospectuses, amounts for 60 | "Offer Proceeds" wording, "[ ]" for ●, whole-rupee amounts, bullet lists, multi-year deployment headers, offers for sale (no proceeds) | objects for 125, amounts for 111; offer-for-sale-only issues say the company receives no proceeds |
+| D22 | M | Promoter holding read for 125 of 139 | rows without "(A)"/"(B)", public rows longer than the window, "©", split decimals ("70.7 9" read as 70.7), no identifiable promoter | 135 of 139, two-decimal precision |
+| O1 | M | No backups, no health signal, no unattended setup | backups were a manual `sqlite3 .backup`; a stopped scheduler was only visible as stale data | scheduled online backups with integrity check and rotation; `app.cli health` and **Attention needed**; opt-in macOS alerts; `scripts/service.sh` launch agents |
+| Q1 | M | No browser end-to-end tests; `next build` broke a running dev server | — | Playwright on the installed Chrome (24 checks); `npm run build:check` builds into `.next-check/` |
+
+Live database before → after re-processing every stored offer document with parsers 1.6 and 1.7:
+
+| Measure | Before | After |
+|---|---|---|
+| Verified annual statements (real IPOs) | 209 | **293** |
+| Annual statements extracted but not reconciled | 145 | 100 |
+| Annual statements requiring review (a check failed) | 24 | 18 |
+| IPOs with a verified annual period | 72 | **97** |
+| IPOs with two or more verified years (needed for growth and Q) | 69 | **94** |
+| Offer documents fully extracted / partial / statements not found | 84 / 35 / 20 | **105 / 24 / 11** (of 140) |
+| IPOs with a fundamental score Q | 61 | **80** |
+| IPOs with a verified P/E (used in scores) | 51 | **70** |
+| Objects of the issue on record (with amounts) | 76 (60) | **127 (111)** of 142 |
+| Promoter holding before / after the issue | 125 / 112 | **136 / 114** of 142 |
+| Average completeness | 57.1% | **66.1%** |
+
+Example: BLS Polymers — balance sheet and cash flow previously taken from the offer-document summary (no totals to
+check, cash-flow PBT different from the restated P&L); now all four periods verified from the restated statements,
+fundamental score 74.9, verified P/E 34.5x at the issue price, completeness 85%.
+
 ## Remaining limitations (not fixed)
 
 * BSE refuses automated requests; BSE-only issues need a manual import.
@@ -136,5 +170,5 @@ Coverage of the 140 real IPOs (121 announced by NSE, 112 listed), before → aft
 * OCR results and lender KPI-table figures are shown but never scored.
 * The industry classifier is phrase-based; close calls are left Unclassified and NSE's own industry label is kept where published, so sector names mix two taxonomies.
 * Rate limiting is in-process; SQLite is single-writer — fine locally, not for several API workers.
-* No browser end-to-end framework is installed; pages were verified with the in-app browser and HTTP smoke checks (TESTING.md).
-* Scheduled jobs run only while the API process runs (DEPLOYMENT.md).
+* Browser end-to-end tests run against a live app and the installed Chrome; they are not run in CI (there is none).
+* Scheduled jobs run only while the API process runs — `scripts/service.sh install` keeps it running on a Mac that is awake (DEPLOYMENT.md).

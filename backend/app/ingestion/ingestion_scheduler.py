@@ -37,10 +37,10 @@ from app.models import DataSource, FieldObservation, IngestionJob, IPOIssue, Job
 
 log = logging.getLogger("kcp.ingestion")
 
-JOB_TYPES = ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "enrichment", "health")
+JOB_TYPES = ("discover", "details", "subscriptions", "listings", "filings", "documents", "peers", "enrichment", "health", "backup")
 JOB_LOCK = {"discover": "source:nse", "details": "source:nse", "subscriptions": "source:nse", "listings": "source:nse",
             "filings": "source:sebi", "documents": "source:documents", "peers": "source:nse_archives", "enrichment": "source:nse",
-            "health": "source:health"}
+            "health": "source:health", "backup": "local:backup"}
 # DataSource row that a job's requests and health are attributed to
 JOB_SOURCE = {"listings": "nse_bhavcopy", "health": "bse_ipo", "documents": "nse_rhp", "filings": "sebi_offer_documents", "peers": "nse_equity_list",
               "enrichment": "nse_shareholding"}
@@ -510,7 +510,22 @@ class IngestionRunner:
             checked = True
         stale_obs = db.execute(select(FieldObservation.id).limit(1)).first() is not None
         self._rescore(db, job, None)  # picks up configuration changes and time-dependent stages; rows are added only on change
-        return "success", {"bse_checked": checked, "has_observations": stale_obs}
+        from app.services.operations import health_problems, notify
+
+        problems = health_problems(db)
+        prev = db.execute(select(IngestionJob).where(IngestionJob.job_type == "health", IngestionJob.id != job.id,
+                                                     IngestionJob.status == "success").order_by(IngestionJob.id.desc()).limit(1)).scalar_one_or_none()
+        alerted = notify(problems, (prev.detail or {}).get("problems") if prev else None)
+        return "success", {"bse_checked": checked, "has_observations": stale_obs, "problems": problems, "alerted": alerted}
+
+    def job_backup(self, db: Session, job: IngestionJob) -> tuple[str, dict[str, Any]]:
+        """Consistent, integrity-checked copy of the database (no network requests)."""
+        from app.services.operations import backup_database
+
+        if not get_settings().backup_enabled:
+            return "skipped", {"reason": "backups disabled (KCP_BACKUP_ENABLED=false)"}
+        res = backup_database()
+        return ("success" if res["status"] in ("success", "skipped") else "failed"), res
 
 
 # ---------------------------------------------------------------------------- scheduler
@@ -566,7 +581,7 @@ def start_scheduler() -> Any:
     plan = [("discover", s.ingest_discovery_minutes, 15), ("details", s.ingest_details_minutes, 90), ("subscriptions", s.ingest_subscription_minutes, 150),
             ("listings", s.ingest_listing_minutes, 200), ("health", s.ingest_health_minutes, 60), ("filings", s.ingest_filings_minutes, 240),
             ("documents", s.ingest_documents_minutes, 300), ("peers", s.ingest_peer_prices_minutes, 420),
-            ("enrichment", s.ingest_enrichment_minutes, 480)]
+            ("enrichment", s.ingest_enrichment_minutes, 480), ("backup", s.backup_hours * 60, 900)]
     import datetime as _dt
 
     for name, minutes, delay in plan:

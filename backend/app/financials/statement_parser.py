@@ -25,7 +25,7 @@ from typing import Any
 
 from app.financials.pdf_tables import Row, align, column_centres, header_text_by_column, is_year_row, merge_split_rows, page_rows
 
-PARSER_VERSION = "1.5"
+PARSER_VERSION = "1.7"
 
 UNIT_TO_CRORE = {"million": 0.1, "lakh": 0.01, "crore": 1.0, "thousand": 1e-4, "billion": 100.0, "rupee": 1e-7}
 _UNIT_RE = re.compile(
@@ -37,6 +37,7 @@ TITLES = {
     "pl": re.compile(r"statement of profit (and|&) loss|profit (and|&) loss (statement|account)", re.I),
     "cf": re.compile(r"cash ?flow statement|statement of cash ?flows?", re.I),
 }
+_BS_OPENING = re.compile(r"\b(?:[ivx]{1,3}|[a-z][.)]|\d[.)]?)?\s*equity (and|&) liabilities\b", re.I)
 REQUIRED = {"bs": ("total_assets",), "pl": ("revenue", "pat"), "cf": ("operating_cash_flow",)}
 
 _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
@@ -44,21 +45,23 @@ _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun",
 # (field, pattern on the normalised label, statement kind). Order matters: first match wins.
 PATTERNS: list[tuple[str, str, str]] = [
     # balance sheet totals
-    ("total_equity_and_liabilities", r"^total (equity|equities) (and|&) liabilities|^total liabilities (and|&) equity", "bs"),
+    ("total_equity_and_liabilities", r"^total (equity|equities) (and|&) liabilit(y|ies)|^total liabilities (and|&) equity", "bs"),
     ("total_assets", r"^total assets", "bs"),
-    ("non_current_assets", r"^total non[- ]?current assets", "bs"),
+    ("non_current_assets", r"^total non ?-? ?current assets", "bs"),
     ("current_assets", r"^total current assets", "bs"),
-    ("non_current_liabilities", r"^total non[- ]?current liabilities", "bs"),
+    ("non_current_liabilities", r"^total non ?-? ?current liabilities", "bs"),
     ("current_liabilities", r"^total current liabilities", "bs"),
     ("total_liabilities", r"^total liabilities$", "bs"),
-    ("total_equity", r"^total equity( attributable.*)?$|^total shareholders'? (funds|equity)|^net worth$|^total equity \(", "bs"),
+    ("total_equity", r"^total equity$|^total shareholders'? (funds|equity)|^net worth$|^total equity \(", "bs"),
+    # equity attributable to the parent's owners excludes non-controlling interests: used only when no total is printed
+    ("total_equity_owners", r"^total equity attributable|^equity attributable to (the )?(owners|equity holders|shareholders)", "bs"),
     ("share_capital", r"^(equity )?share capital", "bs"),
     ("other_equity", r"^other equity|^reserves (and|&) surplus", "bs"),
     ("inventory", r"^inventor(y|ies)", "bs"),
     ("trade_receivables", r"^trade receivables", "bs"),
     ("cash_and_equivalents", r"^cash and cash equivalents|^cash and bank balances", "bs"),
     # profit and loss
-    ("revenue", r"^revenue from operations?|^income from operations?", "pl"),
+    ("revenue", r"^(total )?revenue from operations?|^income from operations?", "pl"),
     ("other_income", r"^other income", "pl"),
     ("total_income", r"^total income|^total revenue", "pl"),
     ("cost_of_materials", r"^cost of (raw )?materials? consumed", "pl"),
@@ -66,11 +69,17 @@ PATTERNS: list[tuple[str, str, str]] = [
     ("finance_costs", r"^finance costs?|^interest (and finance charges|expenses?|costs?)", "pl"),
     ("depreciation", r"^depreciation", "pl"),
     ("other_expenses", r"^other expenses", "pl"),
-    ("total_expenses", r"^total expenses", "pl"),
+    ("total_expenses", r"^total expenses|^total expenditure", "pl"),
     ("pbt", r"^(restated )?(net )?(profit|loss|profit ?/ ?\(loss\)|\(loss\) ?/ ?profit) before tax", "pl"),
     ("pbt_pre_exceptional", r"^(restated )?(profit|loss|profit ?/ ?\(loss\)) before exceptional", "pl"),
-    ("tax_expense", r"^total tax expenses?|^tax expenses? total|^total tax$|^total income tax expenses?|^income tax expenses?$", "pl"),
-    ("pat", r"^(restated )?(net )?(profit|loss|profit ?/ ?\(loss\)|\(loss\) ?/ ?profit) (for|after tax)(?!.*comprehensive)", "pl"),
+    ("tax_expense", r"^total tax expenses?|^tax expenses? total|^total tax$|^total income tax expenses?|^income tax expenses?$|^tax expenses?:?$", "pl"),
+    # tax components, for statements that print no total tax line (summed in derive())
+    ("tax_current", r"^current (income )?tax( expenses?)?( for the (current )?(year|period))?:?$", "pl"),
+    ("tax_deferred", r"^deferred tax\b", "pl"),  # in the P&L any "Deferred tax ..." line is the deferred tax charge or credit
+    ("tax_earlier", r"^(income )?tax(es)? (adjustments?|relating|pertaining|in respect|for|of) (to |of )?(earlier|prior|previous) (years?|periods?)|"
+                    r"^(prior|earlier|previous) (period|year)s? tax(es)?$|"
+                    r"^(short|excess|short ?/ ?\(?excess\)?|\(?excess\)? ?/ ?short) provision", "pl"),
+    ("pat", r"^(total |restated )?(net )?(profit|loss|profit ?/ ?\(loss\)|\(loss\) ?/ ?profit) (for|after tax)(?!.*comprehensive)", "pl"),
     ("eps_basic", r"^basic\b|^earnings per (equity )?share.*basic", "pl"),
     ("eps_diluted", r"^diluted\b|^earnings per (equity )?share.*diluted", "pl"),
     # cash flow
@@ -165,6 +174,7 @@ def norm_label(s: str) -> str:
     s = re.sub(r"(\s)[|\[\]{}]+\s*", r"\1", s)
     for _ in range(3):  # leading enumerators: "a)", "(ii)", "1.", "A.", "I", "ii)", "13 " ...
         s = re.sub(r"^(\(?([a-z]|[ivx]{1,4}|\d{1,2})[.)]|[ivx]{1,4}(?=\s)|\d{1,2}(?=\s+[a-z]))\s*", "", s).strip()
+    s = re.sub(r"^(less|add)\s*:?\s+", "", s)  # "Less: Current Tax", "Add: Deferred Tax"
     for _ in range(3):  # trailing formula tags: "(i)", "(a+b)", "c=(a+b)", "(ii)"
         s = re.sub(r"\s*([a-z]\s*=\s*)?\(([a-z0-9+\-\s]|[ivx])+\)\s*$", "", s).strip()
     return s
@@ -351,6 +361,21 @@ def _title_lines(text: str, n: int = 8) -> str:
     return " ".join(lines[:n])
 
 
+def statement_title(text: str, rx: re.Pattern[str]) -> str | None:
+    """The statement heading of a page: its first lines, or — where the PDF's text stream puts the heading block after the
+    table — its last lines (excluding the page number). None when neither carries the heading (or it is a contents line)."""
+    head = _title_lines(text)
+    if rx.search(head) and "...." not in head:
+        return head
+    if rx is TITLES["bs"] and _BS_OPENING.search(head) and "...." not in head:
+        return head  # a balance sheet headed only "Restated Financial Statement": its table opens with this section
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not re.fullmatch(r"\d{1,4}", ln.strip())]
+    tail = " ".join(lines[-12:])
+    if rx.search(tail) and "...." not in tail:
+        return tail
+    return None
+
+
 def _basis_of(title: str, doc_basis: str) -> str:
     t = title.lower()
     if "consolidated" in t:
@@ -396,9 +421,8 @@ def _without_notes_column(page: Any, rows: list[Row], centres: list[float], titl
 def parse_statement(doc: Any, page_index: int, kind: str, doc_basis: str) -> StatementTable | None:
     page = doc[page_index]
     text = page.get_text()
-    title = _title_lines(text)
-    m = TITLES[kind].search(title)
-    if not m or "...." in title:
+    title = statement_title(text, TITLES[kind])
+    if title is None:
         return None
     rows = merge_split_rows(page_rows(page, page_index + 1))
     title_row_y = next((r.y for r in rows if TITLES[kind].search(r.label)), 0.0)
@@ -434,7 +458,12 @@ def parse_statement(doc: Any, page_index: int, kind: str, doc_basis: str) -> Sta
     if unit is None:
         tbl.warnings.append(f"p{page_index + 1}: unit (₹ million / lakhs / crore) not stated on the page")
     factor = UNIT_TO_CRORE.get(unit or "", None)
-    section = ""
+    section, subtotalled, side, first_side = "", False, "", ""
+    # two bare "Total" rows with identical figures in every column are the two sides of the balance sheet (layouts that
+    # leave section subtotals unlabelled); their agreement is itself the evidence that the sheet balances
+    bare = [r for r in rows if r.columns and norm_label(r.label) == "total" and not (r.y <= title_row_y and r.page == page_index + 1)]
+    side_rows = ([id(r) for r in bare] if kind == "bs" and len(bare) == 2 and bare[0].columns.keys() == bare[1].columns.keys()
+                 and all(bare[0].columns[c].value == bare[1].columns[c].value for c in bare[0].columns) else [])
     sums: dict[tuple[str, int], list[Figure]] = {}
     for r in rows:
         if r.y <= title_row_y and r.page == tbl.page:
@@ -442,6 +471,12 @@ def parse_statement(doc: Any, page_index: int, kind: str, doc_basis: str) -> Sta
         lab = norm_label(r.label)
         if not lab:
             continue
+        raw = re.sub(r"\s+", " ", r.label.lower()).strip()
+        if kind == "bs":  # which side of the balance sheet the row is on (headers may carry a subtotal on the same line)
+            if re.match(r"^(\(?[a-z0-9]{1,2}[.)]\s*|[ivx]{1,3}\s+)?equity (and|&) liabilities", raw):
+                side = "el"
+            elif re.match(r"^(\(?[a-z0-9]{1,2}[.)]\s*|[ivx]{1,3}\s+)?assets\b(?! held| classified)", raw):
+                side = "assets"
         if not r.columns:
             if re.match(r"^(shareholders'? funds|equity)$", lab):
                 section = "eq"
@@ -455,10 +490,23 @@ def parse_statement(doc: Any, page_index: int, kind: str, doc_basis: str) -> Sta
                 section = "ca"
             continue
         targets: list[str] = []
-        if kind == "bs" and lab == "total" and section:
-            # Indian GAAP layout: each section ends with a bare "Total"
-            targets = [{"eq": "total_equity", "ncl": "non_current_liabilities", "cl": "current_liabilities",
-                        "nca": "non_current_assets", "ca": "current_assets"}[section]]
+        if id(r) in side_rows:  # each printed total fills its own side, so the balance check compares the two rows
+            if id(r) == side_rows[0]:
+                first_side = "total_assets" if side == "assets" else "total_equity_and_liabilities"
+                targets = [first_side]
+            else:
+                targets = ["total_equity_and_liabilities" if first_side == "total_assets" else "total_assets"]
+        elif kind == "bs" and side and re.match(r"^total\s*\(\s*([a-z0-9]{1,2}\s*\+\s*)+[a-z0-9]{1,2}\s*\)", raw):
+            # "Total (1+2+3+4)": the sum of all sections — the total of the whole side, whatever the last section was
+            targets = ["total_equity_and_liabilities" if side == "el" else "total_assets"]
+        elif kind == "bs" and section and re.fullmatch(r"sub ?-? ?total", lab):
+            # Indian GAAP layout with "Sub-Total" closing each section
+            targets = [SECTION_TOTAL[section]]
+            subtotalled = True
+        elif kind == "bs" and lab == "total" and section:
+            # a bare "Total" closes a section — or, where sections close with "Sub-Total", a whole side of the balance sheet
+            targets = [("total_equity_and_liabilities" if section in ("eq", "ncl", "cl") else "total_assets") if subtotalled
+                       else SECTION_TOTAL[section]]
         for fld, rx, k in _COMPILED if not targets else []:
             if k == kind and rx.search(lab):
                 targets = [fld]
@@ -497,19 +545,75 @@ def parse_statement(doc: Any, page_index: int, kind: str, doc_basis: str) -> Sta
     return tbl
 
 
+SECTION_TOTAL = {"eq": "total_equity", "ncl": "non_current_liabilities", "cl": "current_liabilities", "nca": "non_current_assets",
+                 "ca": "current_assets"}
+MAX_TITLE_PAGES = 60  # title matches examined per statement kind (a long RHP repeats titles in summaries and notes)
+
+
+def table_score(tbl: StatementTable) -> tuple[int, int, int, int]:
+    """Rank of one candidate table, higher first.
+
+    Readable periods first; then a table whose own figures reconcile (no failed hard check, most passed) — so the full
+    restated statement beats a summary table that lacks the totals needed for the checks; then the most line items.
+    """
+    if not tbl.periods:
+        return (0, 0, 0, len(tbl.figures))
+    passed = failed = 0
+    for ps in merge_periods([tbl]):
+        for c in ps.checks:
+            if c["hard"]:
+                passed += c["passed"]
+                failed += not c["passed"]
+    return (1, -failed, passed, len(tbl.figures))
+
+
 def find_statements(doc: Any, texts: list[str]) -> list[list[StatementTable]]:
-    """Candidate tables per (kind, basis), best first: tables whose periods could be read rank above those that cannot."""
+    """Candidate tables per (kind, basis), best first (``table_score``; the earliest page wins a tie)."""
     doc_basis = document_basis(texts)
-    cands: dict[tuple[str, str], list[tuple[int, int, StatementTable]]] = {}
+    cands: dict[tuple[str, str], list[tuple[tuple[int, int, int, int], int, StatementTable]]] = {}
     for kind, rx in TITLES.items():
-        pages = [i for i, t in enumerate(texts) if rx.search(_title_lines(t)) and "...." not in _title_lines(t)][:20]
+        pages = [i for i, t in enumerate(texts) if statement_title(t, rx) is not None][:MAX_TITLE_PAGES]
         for i in pages:
             tbl = parse_statement(doc, i, kind, doc_basis)
             if tbl is None or not all(any(f == r for f, _ in tbl.figures) for r in REQUIRED[kind]):
                 continue
-            score = len(tbl.figures) + (10_000 if tbl.periods else 0)
-            cands.setdefault((kind, tbl.basis), []).append((-score, i, tbl))  # earliest page wins ties (summary section)
-    return [[t for _, _, t in sorted(v, key=lambda x: (x[0], x[1]))] for _, v in sorted(cands.items())]
+            cands.setdefault((kind, tbl.basis), []).append((table_score(tbl), i, tbl))
+    return [[t for _, _, t in sorted(v, key=lambda x: (tuple(-n for n in x[0]), x[1]))] for _, v in sorted(cands.items())]
+
+
+def _by_period(tbl: StatementTable, fld: str) -> dict[date, float]:
+    cols = {p.column: p.end for p in tbl.periods}
+    return {cols[c]: fig.value for (f, c), fig in tbl.figures.items() if f == fld and c in cols and fig.value is not None}
+
+
+def pbt_agreement(pl: StatementTable, cf: StatementTable) -> int:
+    """Periods in which the cash-flow statement starts from the P&L's profit before tax (same restated set)."""
+    a, b = _by_period(pl, "pbt"), _by_period(cf, "pbt_cf")
+    return sum(1 for end, v in a.items() if end in b and _close(v, b[end]))
+
+
+def pair_cash_flow(groups: list[list[StatementTable]], tables: list[StatementTable]) -> list[str]:
+    """Prefer the cash-flow candidate that agrees with the chosen P&L on profit before tax.
+
+    A prospectus prints both a summary and the full restated statements; taking the P&L from one and the cash flow from
+    the other mixes sets. Among cash-flow candidates with readable periods on the P&L's basis, the one agreeing on PBT in
+    the most periods is used (the ranked choice is kept when none agrees better).
+    """
+    notes: list[str] = []
+    for gi, cf in enumerate(tables):
+        if cf.kind != "cf" or not cf.periods:
+            continue
+        pl = next((t for t in tables if t.kind == "pl" and t.basis == cf.basis and t.periods), None)
+        if pl is None:
+            continue
+        best, best_n = cf, pbt_agreement(pl, cf)
+        for cand in groups[gi]:
+            if cand.periods and (n := pbt_agreement(pl, cand)) > best_n:
+                best, best_n = cand, n
+        if best is not cf:
+            tables[gi] = best
+            notes.append(f"p{best.page}: cash flow statement chosen because it agrees with the P&L on p{pl.page} on profit before tax")
+    return notes
 
 
 # ---------------------------------------------------------------------------- merge + validate
@@ -566,6 +670,8 @@ def derive(ps: PeriodStatement) -> None:
             ps.derived["total_liabilities"] = (g("non_current_liabilities") + g("current_liabilities"), "non-current + current liabilities")  # type: ignore[operator]
         elif g("total_assets") is not None and g("total_equity") is not None:
             ps.derived["total_liabilities"] = (g("total_assets") - g("total_equity"), "total assets − total equity")  # type: ignore[operator]
+    if g("total_equity") is None and g("total_equity_owners") is not None:
+        ps.derived["total_equity"] = (g("total_equity_owners"), "equity attributable to the owners (no total equity line printed)")  # type: ignore[assignment]
     if g("total_equity") is None and g("share_capital") is not None and g("other_equity") is not None:
         ps.derived["total_equity"] = (g("share_capital") + g("other_equity"), "share capital + other equity")  # type: ignore[operator]
     b_nc, b_c = g("borrowings_non_current"), g("borrowings_current")
@@ -575,6 +681,10 @@ def derive(ps: PeriodStatement) -> None:
         ps.derived["total_debt"] = (0.0, "no borrowings line in the balance sheet")
     if g("total_income") is None and g("revenue") is not None and g("other_income") is not None:
         ps.derived["total_income"] = (g("revenue") + g("other_income"), "revenue + other income")  # type: ignore[operator]
+    if g("tax_expense") is None and g("tax_current") is not None:
+        parts = [f for f in ("tax_current", "tax_deferred", "tax_earlier") if g(f) is not None]
+        ps.derived["tax_expense"] = (sum(g(f) or 0.0 for f in parts), "sum of the printed tax lines: " + " + ".join(  # type: ignore[misc]
+            {"tax_current": "current tax", "tax_deferred": "deferred tax", "tax_earlier": "earlier-year tax"}[f] for f in parts))
 
 
 def validate(ps: PeriodStatement, borrowed: bool = False) -> None:
@@ -594,9 +704,18 @@ def validate(ps: PeriodStatement, borrowed: bool = False) -> None:
     if te is not None and ncl is not None and cl is not None:
         check("equity_plus_liabilities", g("total_assets"), te + ncl + cl, "Total assets = Equity + Non-current + Current liabilities")
     if g("current_assets") is not None and g("non_current_assets") is not None:
-        check("assets_add_up", g("total_assets"), g("current_assets") + g("non_current_assets"), "Total assets = Current + Non-current assets")  # type: ignore[operator]
+        # soft: printed subtotals can leave out a group (e.g. assets held for sale) while the balance sheet itself balances
+        check("assets_add_up", g("total_assets"), g("current_assets") + g("non_current_assets"), "Total assets = Current + Non-current assets",  # type: ignore[operator]
+              hard=False)
     if g("pbt") is not None and g("tax_expense") is not None:
-        check("pat_reconciles", g("pat"), g("pbt") - g("tax_expense"), "PAT = PBT − Tax")  # type: ignore[operator]
+        if "tax_expense" in ps.figures:
+            check("pat_reconciles", g("pat"), g("pbt") - g("tax_expense"), "PAT = PBT − Tax")  # type: ignore[operator]
+        elif g("pat") is not None:
+            # tax summed from its printed lines: agreement confirms all three figures; a miss may only mean a tax line the
+            # parser did not recognise, so it is recorded but does not fail the period
+            ok = _close(g("pat"), g("pbt") - g("tax_expense"))  # type: ignore[arg-type, operator]
+            check("pat_reconciles", g("pat"), g("pbt") - g("tax_expense"), "PAT = PBT − (" + ps.derived["tax_expense"][1].split(": ", 1)[1] + ")",  # type: ignore[operator]
+                  hard=ok)
     if "total_income" in ps.figures and g("revenue") is not None and g("other_income") is not None:
         check("income_adds_up", g("total_income"), g("revenue") + g("other_income"), "Total income = Revenue + Other income")  # type: ignore[operator]
     if "total_income" in ps.figures and g("total_expenses") is not None and g("pbt") is not None and "pbt_pre_exceptional" not in ps.figures:
@@ -637,6 +756,7 @@ def extract_financials(doc: Any) -> ExtractionResult:
                 break
         else:
             warnings.append(f"p{t.page}: {t.kind} statement skipped — its reporting periods could not be read")
+    warnings += pair_cash_flow(groups, tables)
     tables = [t for t in tables if t.periods]
     periods = merge_periods(tables, borrowed=any(t.borrowed_periods for t in tables))
     kinds = {t.kind for t in tables}

@@ -19,8 +19,22 @@ export default function SystemHealthPanel() {
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return <LoadingBlock rows={4} />;
   const total = data.completeness.ipos || 1;
+  const problems = data.problems ?? [];
   return (
     <div className="space-y-6">
+      <Panel title="Attention needed"
+             subtitle={data.backups ? `Database backups: ${data.backups.count} kept (every ${data.backups.every_hours} h, newest ${data.backups.last_at ? fmtDateTime(data.backups.last_at) : "none yet"})` : undefined}>
+        {problems.length ? (
+          <ul className="space-y-2 text-sm">
+            {problems.map((p) => (
+              <li key={p.code} className="flex gap-2">
+                <span className={`mt-1.5 size-2 shrink-0 rounded-full ${p.level === "error" ? "bg-neg" : "bg-warn"}`} aria-hidden />
+                <span className="text-ink-2"><span className="sr-only">{p.level}: </span>{p.message}</span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="flex items-center gap-2 text-sm text-ink-2"><span className="size-2 rounded-full bg-pos" aria-hidden />Every check passes: jobs on schedule, no dead letters, backups current, disk space sufficient.</p>}
+      </Panel>
       <div className="grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel title="Pipeline funnel" subtitle={`Where the ${data.completeness.ipos} real IPOs on record stand (demo records excluded)`}>
           <ul className="space-y-2.5">

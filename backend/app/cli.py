@@ -180,6 +180,27 @@ def cmd_fill_gaps(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup(a: argparse.Namespace) -> int:
+    """Consistent, integrity-checked copy of the database into data/backups (safe while the API runs)."""
+    from app.services.operations import backup_database
+
+    res = backup_database(a.keep)
+    print(json.dumps(res))
+    return 0 if res["status"] in ("success", "skipped") else 1
+
+
+def cmd_health(_: argparse.Namespace) -> int:
+    """What needs attention (overdue jobs, dead-letter documents, backups, disk). Exit 0 when fine, 1 on warnings, 2 on errors."""
+    from app.services.operations import health_problems
+
+    problems = health_problems(_db())
+    for p in problems:
+        print(f"{p['level'].upper():8} {p['message']}")
+    if not problems:
+        print("OK       every check passes")
+    return 2 if any(p["level"] == "error" for p in problems) else (1 if problems else 0)
+
+
 def cmd_e2e_demo(a: argparse.Namespace) -> int:
     from app.cli_e2e import run_e2e
 
@@ -284,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--report", help="write a Markdown report to this path")
     p.set_defaults(fn=cmd_e2e_demo)
     sub.add_parser("worker", help="run the ingestion scheduler as a standalone process").set_defaults(fn=cmd_worker)
+    p = sub.add_parser("backup", help="consistent, integrity-checked copy of the database into data/backups")
+    p.add_argument("--keep", type=int, default=None, help="backups to keep (default KCP_BACKUP_KEEP, 14)")
+    p.set_defaults(fn=cmd_backup)
+    sub.add_parser("health", help="list what needs attention; exit 0 fine, 1 warnings, 2 errors").set_defaults(fn=cmd_health)
     p = sub.add_parser("ingest", help="ingest a local PDF/TXT offer document")
     p.add_argument("path")
     p.add_argument("--ipo-id", type=int)

@@ -876,4 +876,6 @@ export interface SystemHealth {
   completeness: { ipos: number; computed: number; median: number | null; below_50: number };
   integrity: { statements_requiring_review: number; field_conflicts: number; stale_live_issues: { ipo_id: number; company_name: string; last_verified_at: string | null }[] };
   hosting_note: string;
+  problems?: { level: "warning" | "error"; code: string; message: string }[];
+  backups?: { enabled: boolean; every_hours: number; keep: number; count: number; last_at: string | null };
 }

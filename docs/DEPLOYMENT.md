@@ -30,6 +30,36 @@ Keep it running with your OS service manager (launchd, systemd) or `tmux`. Separ
 the API if you run several API workers: set `KCP_SCHEDULER_ENABLED=false` on the API and run one
 `python -m app.cli worker`.
 
+### Always-on on your own Mac
+
+```bash
+scripts/service.sh install
+```
+
+Builds the web app and installs two launch agents (`com.kcpinsights.api` — API plus scheduler — and
+`com.kcpinsights.web` — `next start`) that start at login and restart if they exit; logs go to
+`~/Library/Logs/KcpInsights/`. Stop `scripts/dev.sh` first (same ports). `scripts/service.sh status` shows whether
+they run plus the current health problems; `scripts/service.sh uninstall` removes them (data is kept). On Linux,
+`scripts/service.sh systemd` prints matching systemd units. Data stays current while the Mac is awake; jobs catch up
+after sleep.
+
+### Backups, health and alerts
+
+* **Backups** — the scheduler copies the database every `BACKUP_HOURS` (24) into `backend/data/backups/` with
+  SQLite's online-backup API (safe while the API writes), integrity-checks each copy and keeps the newest
+  `BACKUP_KEEP` (14). On demand: `python -m app.cli backup`. Restore: stop the API, copy a backup over
+  `backend/data/kcpinsights.db` (and delete any `kcpinsights.db-wal` / `-shm` next to it), start again.
+* **Health** — `python -m app.cli health` lists what needs attention (jobs overdue against their schedule,
+  dead-letter documents, a missing or stale backup, low disk space) and exits 0 / 1 (warnings) / 2 (errors), so it
+  can drive any monitor. The same list is on **System health → Attention needed** and in each health-job run.
+* **Alerts** — `KCP_DESKTOP_ALERTS=true` shows a macOS notification whenever that list changes. Local only: nothing
+  is sent over the network.
+
+### Checking a production build while developing
+
+`npm run build:check` (in `frontend/`) builds into `.next-check/`, so it does not disturb a running `next dev`
+(both would otherwise use `.next/`).
+
 ## Free hosting — what works and what does not
 
 | Piece | Free option | Limits that matter here |
@@ -72,6 +102,9 @@ and has a health check on `/api/health`. Mount `/app/data` on a persistent volum
 | `INGEST_MAX_SHAREHOLDING_PER_RUN`, `INGEST_MAX_OFFER_TERM_REREADS_PER_RUN` | 15, 10 | per-run limits of that job |
 | `OCR_ENABLED`, `OCR_MAX_PAGES`, `OCR_DPI`, `OCR_TIME_BUDGET_SECONDS` | true, 150, 300, 600 | local OCR limits |
 | `MAX_UPLOAD_MB`, `MAX_PDF_PAGES` | 20, 600 | upload limits |
+| `BACKUP_ENABLED`, `BACKUP_HOURS`, `BACKUP_KEEP` | true, 24, 14 | scheduled database backups in `data/backups/` |
+| `MIN_FREE_DISK_GB` | 2 | below this, health reports an error |
+| `DESKTOP_ALERTS` | false | macOS notification when the health problems change |
 | `LOG_FORMAT` | text | `json` writes one JSON object per log line (time, level, logger, message), redaction unchanged |
 
 Frontend: `KCP_API_URL` (where `/api/*` is proxied).
@@ -89,4 +122,6 @@ Frontend: `KCP_API_URL` (where `/api/*` is proxied).
 | Fill every missing issue field now (NSE details, offer terms, equity lists, shareholding filings) | `.venv/bin/python -m app.cli fill-gaps` |
 | Recompute stored scores | `.venv/bin/python -m app.cli refresh-scores` |
 | End-to-end demonstration | `.venv/bin/python -m app.cli e2e-demo BCSSL --report ../docs/E2E_DEMONSTRATION.md` |
-| Backup | `sqlite3 data/kcpinsights.db ".backup data/backup.db"` (never copy the live file) |
+| Backup now | `.venv/bin/python -m app.cli backup` (never copy the live file) |
+| What needs attention | `.venv/bin/python -m app.cli health` |
+| Run unattended (macOS) | `scripts/service.sh install` · `status` · `uninstall` |

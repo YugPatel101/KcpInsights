@@ -383,3 +383,54 @@ def test_issue_facts_give_a_value_source_or_reason_for_every_field(db, client):
     db.commit()
     facts = {f["key"]: f for f in client.get(f"/api/ipos/{ipo.id}").json()["issue_facts"]}
     assert facts["pe_post"]["value"] is None and "failed an accounting check" in facts["pe_post"]["reason"]
+
+
+@pytest.mark.parametrize("page, expected", [
+    # "Offer Proceeds" wording, "Sr. No." header, whole-rupee amounts (lakhs)
+    ("OBJECTS OF THE OFFER Requirement of Funds: The Offer Proceeds are proposed to be utilized towards the following objects: (₹ in Lakhs) "
+     "Sr. No. Particulars Amount 1 Funding incremental working capital requirements of our Company 2,461.04 2 Repayment of certain borrowings "
+     "800.00 3 General Corporate Purposes [●] Total [●]",
+     [("Funding incremental working capital requirements of our Company", 24.6104), ("Repayment of certain borrowings", 8.0),
+      ("General Corporate Purposes", None)]),
+    # "[ ]" where the ● glyph was lost
+    ("OBJECTS OF THE ISSUE The Net Proceeds are proposed to be utilized in accordance with the details provided in the following table: "
+     "(₹ in Lakhs) Particulars Estimated Amount Repayment of certain outstanding borrowings availed by our Company 7,100.00 "
+     "General Corporate Purposes* [ ] Total",
+     [("Repayment of certain outstanding borrowings availed by our Company", 71.0), ("General Corporate Purposes", None)]),
+    # header text read into the first row, ahead of the first enumerated object
+    ("OBJECTS OF THE ISSUE The Net Proceeds are proposed to be deployed as set forth below: (₹ in million) Particulars Estimated amount "
+     "Fiscal 2027 Fiscal 2028 1. Funding the capital expenditure for a new plant 549.29 300.00 249.29 2. General Corporate Purposes [●] [●] [●]",
+     [("Funding the capital expenditure for a new plant", 54.929), ("General Corporate Purposes", None)]),
+])
+def test_objects_table_variants(page, expected):
+    rows = objects_of_issue(["x"] * 21 + [page]).value
+    assert [(r["purpose"], r["amount_cr"]) for r in rows] == [(p, pytest.approx(a) if a else None) for p, a in expected]
+
+
+def test_objects_of_an_offer_for_sale_only():
+    page = ("OBJECTS OF THE OFFER The objects of the Offer are to (i) carry out the Offer for Sale of [●] Equity Shares of face value of ₹ 5 "
+            "each aggregating up to ₹12,000 million by the Promoter Selling Shareholder; and (ii) achieve the benefits of listing the Equity "
+            "Shares on the Stock Exchanges. Our Company will not receive any proceeds from the Offer.")
+    d = objects_of_issue(["x"] * 21 + [page])
+    assert d is not None and "receives no proceeds" in (d.basis or "")
+    assert [r["amount_cr"] for r in d.value] == [pytest.approx(1200.0), None]
+    assert d.value[1]["purpose"].startswith("Achieve the benefits of listing")
+
+
+@pytest.mark.parametrize("page, expected", [
+    # no "(A)"/"(B)" brackets, split words and a split last decimal ("70.7 9", "28.8 0")
+    ("Category Total A Promot er & Promot er Group 6 3,09,78, 500 - - 3,09,78, 500 70.7 9 3,09,78, 500 B Public 13 1,25,87, 908 - - 28.8 0 "
+     "C Non Promoter", 70.79),
+    # a public row longer than the window used to require a following "(C)"
+    ("(A) Promoter and Promoter Group 4 299,507,360 0 0 299,507, 360 65.90 % 299,507,36 0 (B) Public 255 154,990,310 0 0 154,990, 310 "
+     "34.10 % " + "0 " * 200, 65.9),
+])
+def test_shareholding_pattern_variants(page, expected):
+    assert promoter_holding_pre([page]).value == pytest.approx(expected)
+
+
+def test_company_without_a_promoter():
+    rows = "(A) Promoters and Promoter Group - - - - - - - - (B) Public 227,999 1,670,555,049 - - 67.50% (C) Non Promoter- Non Public 32.50%"
+    assert promoter_holding_pre([rows]) is None  # a blank row alone is not evidence of zero
+    d = promoter_holding_pre(["Our Company does not have an identifiable promoter.", rows])
+    assert d is not None and d.value == 0.0 and "no identifiable promoter" in (d.basis or "")

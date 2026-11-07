@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     ingest_enrichment_minutes: int = 360
     ingest_max_shareholding_per_run: int = 15
     ingest_max_offer_term_rereads_per_run: int = 10
+    # Unattended operation: daily database backups (data/backups, newest kept), health problems and local alerts
+    backup_enabled: bool = True
+    backup_hours: int = 24
+    backup_keep: int = 14
+    min_free_disk_gb: float = 2.0
+    desktop_alerts: bool = False  # macOS notification when the set of health problems changes (no network)
     # Local OCR (Tesseract) for image-only prospectus pages; skipped automatically when Tesseract is not installed
     ocr_enabled: bool = True
     ocr_max_pages: int = 150

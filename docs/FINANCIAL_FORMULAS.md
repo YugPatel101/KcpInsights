@@ -15,7 +15,32 @@ closing) ÷ 2; with no opening balance the closing balance is used and the metri
 | EBITDA | PBT + finance costs + depreciation & amortisation |
 | Total borrowings | current + non-current borrowings (incl. current maturities of long-term debt); lease liabilities excluded |
 | Total liabilities | non-current + current liabilities |
+| Total equity | the printed "Total equity" (including non-controlling interests in consolidated statements); equity attributable to the owners only when no total is printed; else share capital + other equity |
 | Capital expenditure | sum of purchases of property, plant, equipment and intangibles in the cash-flow statement, as a positive amount |
+
+## Statement verification (accounting checks)
+
+A reporting period is **verified** — and only then used in ratios and scores — when at least two of the three core
+identities hold to within 0.5% (or ₹0.02 cr) and no hard check fails:
+
+| Check | Identity | Kind |
+|---|---|---|
+| `balance_sheet_balances` | Total assets = Total equity and liabilities | core, hard |
+| `equity_plus_liabilities` | Total assets = Equity + Non-current + Current liabilities | core, hard |
+| `pat_reconciles` | PAT = PBT − Tax | core, hard when tax is a printed total |
+| `income_adds_up` | Total income = Revenue + Other income | hard |
+| `assets_add_up` | Total assets = Current + Non-current assets | soft (printed subtotals can leave out a group, e.g. assets held for sale) |
+| `pbt_reconciles`, `equity_adds_up` | PBT = Total income − Total expenses; Total equity = Share capital + Other equity | soft |
+| `cash_flow_starts_from_pbt` | Cash-flow PBT = P&L PBT | soft; hard when a statement borrowed its column periods |
+
+Where a P&L prints tax only as its parts, tax = current tax + deferred tax + earlier-year tax as printed (signs
+as printed). `pat_reconciles` then counts when it holds; a miss is recorded as soft, because it may only mean a tax
+line the parser did not recognise. A period with a failed hard check is stored as *requires review* and never
+scored; one with fewer than two core checks stays *extracted* (shown, labelled unverified, never scored).
+
+**Which statement is read.** A prospectus prints the restated statements and summaries of them. Candidates are
+ranked by their own reconciliation (no failed hard check, most checks passed), then by completeness; the cash-flow
+statement is the one whose profit before tax agrees with the chosen P&L in the most periods.
 
 ## Profitability
 

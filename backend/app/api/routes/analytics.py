@@ -237,6 +237,7 @@ def system_health(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Pipeline monitoring: scheduler, sources, jobs, document processing, dead letters, completeness and conflicts."""
     from app.ingestion import data_quality_service as dq
     from app.ingestion.ingestion_scheduler import scheduler_status
+    from app.services import operations as ops
 
     s = get_settings()
     now = utcnow()
@@ -289,4 +290,7 @@ def system_health(db: Session = Depends(get_db)) -> dict[str, Any]:
                                              "last_verified_at": i.last_verified_at.isoformat() if i.last_verified_at else None} for i in stale_live]},
         "hosting_note": ("Scheduled jobs run only while the API process (or `python -m app.cli worker`) is running. A host that sleeps when idle "
                          "does not run them; see docs/DEPLOYMENT.md."),
+        "problems": ops.health_problems(db),
+        "backups": {"enabled": s.backup_enabled, "every_hours": s.backup_hours, "keep": s.backup_keep, "count": len(ops.list_backups()),
+                    "last_at": last.isoformat() if (last := ops.last_backup_at()) else None},
     }

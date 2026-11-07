@@ -49,7 +49,7 @@ No paid services, API keys or AI models; no manual data entry. Runs fully on one
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2, Alembic, APScheduler, httpx, PyMuPDF, Tesseract (optional), Argon2 |
 | Database | SQLite (WAL) |
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Recharts 3, Zod |
-| Quality | pytest (111), vitest (14), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
+| Quality | pytest (129), vitest (14), Playwright end-to-end (24, installed Chrome), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
 
 ## Architecture
 
@@ -95,7 +95,8 @@ cd frontend && npm install && npm run dev
 ```
 
 Useful commands (from `backend/`): `python -m app.cli sync`, `process-documents --limit 20`,
-`backfill-history --days 365`, `fill-gaps`, `reclassify`, `refresh-scores`, `create-admin`, `e2e-demo BCSSL`.
+`backfill-history --days 365`, `fill-gaps`, `reclassify`, `refresh-scores`, `backup`, `health`, `create-admin`,
+`e2e-demo BCSSL`. To keep it running unattended on a Mac: `scripts/service.sh install` (see docs/DEPLOYMENT.md).
 
 ## Screenshots
 
@@ -109,7 +110,7 @@ screenshots reflect the current market.
 cd backend && .venv/bin/python -m pytest && .venv/bin/ruff check app tests && .venv/bin/mypy app
 ```
 ```bash
-cd frontend && npm test && npm run lint && npm run typecheck && npx next build
+cd frontend && npm test && npm run lint && npm run typecheck && npm run build:check && npm run test:e2e
 ```
 
 What is covered and how the last run went: [docs/TESTING.md](docs/TESTING.md). A full real-IPO run —
@@ -152,7 +153,8 @@ the in-app **Methodology** page renders the active configuration.
 * The industry classifier is phrase-based and declines close calls; sector names mix NSE's labels with
   the classifier's.
 * Listing history covers issues discovered so far (backfill extends it); results are descriptive, not predictive.
-* Data is fresh only while the API process runs; free sleeping hosts cannot run the pipeline 24/7.
+* Data is fresh only while the API process runs (`scripts/service.sh install` keeps it running on a Mac);
+  free sleeping hosts cannot run the pipeline 24/7.
 
 ## Documentation
 

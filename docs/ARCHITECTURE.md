@@ -52,6 +52,7 @@
 | `app/services/quant_engine.py`, `scoring_config.py` | Ratios, scores, risk; versioned configuration and industry profiles |
 | `app/services/field_registry.py`, `completeness.py` | Field registry; per-IPO completeness, pipeline stage, sources tried |
 | `app/services/issue_facts.py` | Key issue facts for the research page: value + source/status, or the reason it is missing |
+| `app/services/operations.py` | Online database backups with rotation, health problems from stored state, opt-in local alerts |
 | `app/services/ipo_service.py` | Serialisation, engine inputs, stored-score access, refresh |
 | `app/api/routes/*` | REST endpoints (OpenAPI at `/api/docs`) |
 | `app/cli.py`, `cli_e2e.py` | Administration and the end-to-end demonstration |
