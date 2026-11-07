@@ -9,7 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -38,29 +37,6 @@ class Settings(BaseSettings):
     max_upload_mb: int = 20
     max_pdf_pages: int = 600
 
-    # --- AI provider configuration -------------------------------------------------
-    # "auto": use Ollama when its health check passes, otherwise the deterministic engine.
-    # "deterministic": never call a model. "ollama": prefer Ollama (still falls back).
-    ai_provider: Literal["auto", "deterministic", "ollama", "external"] = "auto"
-    ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "qwen2.5:3b"
-    ollama_small_model: str = "qwen2.5:1.5b"
-    ollama_use_small_model: bool = False
-    ollama_embed_model: str = "nomic-embed-text"
-    ollama_timeout_seconds: float = 60.0
-
-    # Optional OpenAI-compatible endpoint. Disabled by default and never required.
-    external_llm_enabled: bool = False
-    external_llm_base_url: str = ""
-    external_llm_model: str = ""
-    external_llm_api_key: str = Field(default="", repr=False)
-
-    # Agent limits (prevent runaway loops)
-    agent_max_steps: int = 6
-    agent_max_tool_calls: int = 12
-    agent_deadline_seconds: float = 75.0
-    agent_max_context_chars: int = 24_000
-
     # Mode C: allow-listed official hosts for server-side document fetching.
     source_allowed_hosts: str = (
         "www.sebi.gov.in,sebi.gov.in,www.nseindia.com,nsearchives.nseindia.com,"
@@ -70,6 +46,55 @@ class Settings(BaseSettings):
     source_fetch_max_mb: int = 25
     source_fetch_min_interval_seconds: float = 5.0
     source_user_agent: str = "KcpInsights-Research/1.0 (educational; manual-trigger)"
+
+    # --- Live ingestion (Mode C) ----------------------------------------------------------
+    scheduler_enabled: bool = True  # in-process scheduler inside the API (also: `python -m app.cli worker`)
+    ingest_enabled: bool = True
+    ingest_min_request_interval_seconds: float = 2.5  # per host, never concurrent
+    ingest_discovery_minutes: int = 360
+    ingest_details_minutes: int = 360
+    ingest_subscription_minutes: int = 20
+    ingest_listing_minutes: int = 45
+    ingest_health_minutes: int = 30
+    ingest_documents_minutes: int = 60  # each run handles at most ingest_max_documents_per_run documents
+    ingest_listing_window_days: int = 120  # how far back recently listed issues are imported
+    ingest_max_detail_fetches_per_run: int = 15
+    # Official offer documents (RHP) from NSE archives: downloaded, parsed for restated financials, then scored.
+    ingest_download_offer_documents: bool = True
+    ingest_max_offer_document_mb: int = 80  # per download; RHP archives are typically 10–30 MB
+    ingest_max_documents_per_run: int = 3
+    documents_max_total_mb: int = 1500  # originals beyond this are pruned (oldest listed first); extracted data is kept
+    document_recheck_days: int = 3  # upcoming/open issues: re-check the archive for a revised RHP (HEAD request)
+    document_window_days: int = 180  # listed issues older than this are not fetched
+    document_max_attempts: int = 5  # failed downloads/extractions retry with exponential backoff, then become dead letters
+    # SEBI public-issue filings (draft and red herring offer documents), first listing page polled daily
+    ingest_sebi_filings: bool = True
+    ingest_filings_minutes: int = 720
+    # listed peers: daily official closing price from the NSE bhavcopy, matched via the NSE equity list
+    ingest_peer_prices_minutes: int = 1440
+    # Gap filling for every IPO, not only active ones: NSE issue details are re-checked weekly while NSE-published fields
+    # are missing; the enrichment job adds face value/ISIN from NSE's equity lists, the shareholding pattern filed with
+    # NSE after listing, and re-reads stored offer documents when the offer-terms extractor changes
+    details_recheck_days: int = 7
+    ingest_enrichment_minutes: int = 360
+    ingest_max_shareholding_per_run: int = 15
+    ingest_max_offer_term_rereads_per_run: int = 10
+    # Unattended operation: daily database backups (data/backups, newest kept), health problems and local alerts
+    backup_enabled: bool = True
+    backup_hours: int = 24
+    backup_keep: int = 14
+    min_free_disk_gb: float = 2.0
+    desktop_alerts: bool = False  # macOS notification when the set of health problems changes (no network)
+    # Local OCR (Tesseract) for image-only prospectus pages; skipped automatically when Tesseract is not installed
+    ocr_enabled: bool = True
+    ocr_max_pages: int = 150
+    ocr_dpi: int = 300
+    ocr_time_budget_seconds: int = 600
+    # Freshness thresholds used for stale-data warnings
+    stale_subscription_minutes: int = 120
+    stale_issue_details_hours: int = 24
+    stale_peer_price_days: int = 30  # peer prices older than this (vs the issue) are flagged
+    log_format: Literal["text", "json"] = "text"
 
     @property
     def is_production(self) -> bool:
@@ -83,9 +108,6 @@ class Settings(BaseSettings):
     def allowed_source_hosts(self) -> set[str]:
         return {h.strip().lower() for h in self.source_allowed_hosts.split(",") if h.strip()}
 
-    @property
-    def active_ollama_model(self) -> str:
-        return self.ollama_small_model if self.ollama_use_small_model else self.ollama_model
 
 
 @lru_cache

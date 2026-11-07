@@ -43,7 +43,7 @@ function LoginForm() {
       <KcpInput label="Email" type="email" autoComplete="email" placeholder="you@example.com" error={formState.errors.email?.message} {...register("email")} />
       <KcpInput label="Password" type="password" autoComplete="current-password" placeholder="••••••••" error={formState.errors.password?.message} {...register("password")} />
 
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-ink-3">
         Forgot your password? Self-hosted installs have no e-mail service; an administrator can reset it with the CLI (see README).
       </p>
 
@@ -53,14 +53,14 @@ function LoginForm() {
         </KcpButton>
       </div>
 
-      <p className="text-center text-sm text-slate-400">
+      <p className="text-center text-sm text-ink-2">
         Don&apos;t have an account?{" "}
-        <Link href="/signup" className="font-semibold text-white transition hover:underline">
+        <Link href="/signup" className="font-semibold text-ink transition hover:underline">
           Create one
         </Link>
       </p>
-      <p className="text-center text-xs text-slate-500">
-        <Link href="/ipos" className="hover:text-slate-300">Continue without an account</Link> — browsing and scores work signed out.
+      <p className="text-center text-xs text-ink-3">
+        <Link href="/ipos" className="hover:text-ink-2">Continue without an account</Link> — browsing and scores work signed out.
       </p>
     </form>
   );

@@ -17,8 +17,6 @@ LIMITS: dict[str, tuple[int, float]] = {
     "login": (8, 300.0),  # per IP+email: 8 attempts / 5 minutes
     "login_ip": (30, 300.0),  # per IP across e-mails
     "register": (5, 3600.0),
-    "agent": (20, 60.0),
-    "agent_anon": (6, 60.0),
     "report": (10, 60.0),
     "import": (10, 60.0),
     "upload": (10, 300.0),

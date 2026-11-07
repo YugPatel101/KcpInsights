@@ -19,55 +19,59 @@ import {
 } from "recharts";
 import { useRouter } from "next/navigation";
 import { fmtNum } from "@/lib/format";
-import type { DashboardSummary, PeerRow, Statement } from "@/lib/types";
+import type { DashboardSummary } from "@/lib/types";
 
-// Categorical palette validated for the dark surface (dataviz validator: all checks pass).
+// Categorical palette validated for the dark surface (dataviz validator: all checks pass). Fixed order, never cycled.
 export const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500"] as const;
-const AXIS = { stroke: "#64748b", fontSize: 12 };
-const GRID = "rgba(255,255,255,0.06)";
+// Semantic colours (design tokens): positive / negative outcomes only, never used as series colours.
+const POS = "#34b27d";
+const NEG = "#e0614a";
+const INK_3 = "#727d8c";
+const AXIS = { stroke: INK_3, fontSize: 12 };
+const GRID = "#232933";
 const tooltipStyle = {
-  contentStyle: { background: "#0b0b0c", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, fontSize: 12, color: "#e2e8f0" },
-  labelStyle: { color: "#f8fafc", fontWeight: 600 },
-  itemStyle: { color: "#cbd5e1" },
-  cursor: { fill: "rgba(255,255,255,0.04)" },
+  contentStyle: { background: "#161a21", border: "1px solid #313945", borderRadius: 8, fontSize: 12, color: "#e8ebf0" },
+  labelStyle: { color: "#e8ebf0", fontWeight: 600 },
+  itemStyle: { color: "#aab3c0" },
+  cursor: { fill: "rgba(255,255,255,0.03)" },
 };
+const legendStyle = { fontSize: 12, color: "#aab3c0" };
 
-/** Revenue / EBITDA / PAT per period, INR crore (single axis). */
-export function FinancialBarsChart({ statements }: { statements: Statement[] }) {
-  const data = statements.map((s) => ({ period: s.period_label, Revenue: s.revenue, EBITDA: s.ebitda, PAT: s.pat }));
+/** Revenue, EBITDA and PAT per annual period, INR crore (one axis). */
+export function FinancialBarsChart({ rows }: { rows: { period: string; revenue: number | null; ebitda: number | null; pat: number | null }[] }) {
   return (
-    <div className="h-72" role="img" aria-label="Revenue, EBITDA and PAT by period in INR crore">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 8 }} barGap={2}>
+    <div className="h-64 w-full" role="img" aria-label="Revenue, EBITDA and PAT by period in INR crore">
+      <ResponsiveContainer>
+        <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barGap={2}>
           <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="period" tick={AXIS} tickLine={false} axisLine={{ stroke: GRID }} />
-          <YAxis tick={AXIS} tickLine={false} axisLine={false} width={64} label={{ value: "₹ crore", angle: -90, position: "insideLeft", fill: "#64748b", fontSize: 12 }} />
-          <Tooltip {...tooltipStyle} formatter={(v) => (typeof v === "number" ? `₹${fmtNum(v, 1)} cr` : "—")} />
-          <Legend wrapperStyle={{ fontSize: 12, color: "#cbd5e1" }} />
-          {(["Revenue", "EBITDA", "PAT"] as const).map((k, i) => (
-            <Bar key={k} dataKey={k} fill={SERIES[i]} radius={[4, 4, 0, 0]} maxBarSize={28} />
-          ))}
+          <XAxis dataKey="period" tick={AXIS} axisLine={false} tickLine={false} />
+          <YAxis tick={AXIS} axisLine={false} tickLine={false} width={64} tickFormatter={(v) => fmtNum(v, 0)} />
+          <Tooltip {...tooltipStyle} formatter={(v) => `₹${fmtNum(Number(v), 1)} cr`} />
+          <Legend wrapperStyle={legendStyle} />
+          <Bar dataKey="revenue" name="Revenue" fill={SERIES[0]} radius={[4, 4, 0, 0]} maxBarSize={28} />
+          <Bar dataKey="ebitda" name="EBITDA" fill={SERIES[1]} radius={[4, 4, 0, 0]} maxBarSize={28} />
+          <Bar dataKey="pat" name="PAT" fill={SERIES[2]} radius={[4, 4, 0, 0]} maxBarSize={28} />
         </BarChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-/** EBITDA and PAT margins (%) per period — a separate chart instead of a second axis. */
-export function MarginChart({ statements }: { statements: Statement[] }) {
-  const data = statements.map((s) => ({ period: s.period_label, "EBITDA margin": s.derived.ebitda_margin_pct, "PAT margin": s.derived.pat_margin_pct }));
+/** Up to four ratios sharing one unit, across annual periods. */
+export function RatioTrendChart({ rows, series, unit }: { rows: Record<string, number | string | null>[]; series: { key: string; label: string }[]; unit: "%" | "x" }) {
   return (
-    <div className="h-56" role="img" aria-label="EBITDA and PAT margin by period in percent">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+    <div className="h-56 w-full" role="img" aria-label={`Ratio trend: ${series.map((s) => s.label).join(", ")}`}>
+      <ResponsiveContainer>
+        <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="period" tick={AXIS} tickLine={false} axisLine={{ stroke: GRID }} />
-          <YAxis tick={AXIS} tickLine={false} axisLine={false} width={48} unit="%" />
-          <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-          <Tooltip {...tooltipStyle} formatter={(v) => (typeof v === "number" ? `${v.toFixed(2)}%` : "—")} />
-          <Legend wrapperStyle={{ fontSize: 12, color: "#cbd5e1" }} />
-          <Line type="monotone" dataKey="EBITDA margin" stroke={SERIES[1]} strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
-          <Line type="monotone" dataKey="PAT margin" stroke={SERIES[2]} strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
+          <XAxis dataKey="period" tick={AXIS} axisLine={false} tickLine={false} />
+          <YAxis tick={AXIS} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${fmtNum(v, unit === "x" ? 1 : 0)}${unit}`} />
+          <Tooltip {...tooltipStyle} formatter={(v) => (v === null || v === undefined ? "n/a" : `${fmtNum(Number(v), 2)}${unit}`)} />
+          {series.length > 1 && <Legend wrapperStyle={legendStyle} />}
+          {series.slice(0, 4).map((s, i) => (
+            <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={SERIES[i]} strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "#11141a" }}
+                  connectNulls={false} isAnimationActive={false} />
+          ))}
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -76,91 +80,163 @@ export function MarginChart({ statements }: { statements: Statement[] }) {
 
 type ScatterPoint = DashboardSummary["scatter"][number];
 
-export function QualityRiskScatter({ points }: { points: ScatterPoint[] }) {
+/** Fundamental score (x) against risk score (y); each dot opens the IPO. */
+export function ScoreRiskScatter({ points }: { points: ScatterPoint[] }) {
   const router = useRouter();
+  const groups = [
+    { label: "Mainboard", color: SERIES[0], data: points.filter((p) => p.issue_type !== "sme") },
+    { label: "SME", color: SERIES[1], data: points.filter((p) => p.issue_type === "sme") },
+  ].filter((g) => g.data.length);
   return (
-    <div className="h-80" role="img" aria-label="Quality score versus risk score per IPO">
-      <ResponsiveContainer width="100%" height="100%">
-        <ScatterChart margin={{ top: 12, right: 16, left: 8, bottom: 24 }}>
+    <div className="h-72 w-full" role="img" aria-label="Fundamental score versus risk score">
+      <ResponsiveContainer>
+        <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
           <CartesianGrid stroke={GRID} />
-          <XAxis type="number" dataKey="risk" name="Risk" domain={[0, 100]} tick={AXIS} tickLine={false}
-            label={{ value: "Risk score (higher = riskier)", position: "insideBottom", offset: -14, fill: "#64748b", fontSize: 12 }} />
-          <YAxis type="number" dataKey="quality" name="Quality" domain={[0, 100]} tick={AXIS} tickLine={false} width={48}
-            label={{ value: "Quality", angle: -90, position: "insideLeft", fill: "#64748b", fontSize: 12 }} />
+          <XAxis type="number" dataKey="score" name="Fundamental score" domain={[0, 100]} tick={AXIS}
+                 label={{ value: "Fundamental score (higher = stronger)", position: "insideBottom", offset: -8, fill: INK_3, fontSize: 11 }} />
+          <YAxis type="number" dataKey="risk" name="Risk score" domain={[0, 100]} tick={AXIS} width={40} />
           <ZAxis range={[90, 90]} />
-          <ReferenceLine x={35} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
-          <ReferenceLine x={60} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
-          <Tooltip
-            {...tooltipStyle}
-            content={({ payload }) => {
-              const p = payload?.[0]?.payload as ScatterPoint | undefined;
-              if (!p) return null;
-              return (
-                <div className="rounded-lg border border-white/10 bg-[#0b0b0c] px-3 py-2 text-xs text-slate-300">
-                  <div className="font-semibold text-white">{p.name}</div>
-                  <div>{p.sector}</div>
-                  <div className="mt-1 tabular-nums">Quality {p.quality.toFixed(1)} · Risk {p.risk.toFixed(1)}</div>
-                  <div className="tabular-nums">Composite {p.composite === null ? "unavailable" : p.composite.toFixed(1)}</div>
-                  {p.data_status === "synthetic" && <div className="mt-1 text-fuchsia-300">Synthetic demo data</div>}
-                </div>
-              );
-            }}
-          />
-          <Scatter data={points} fill={SERIES[0]} stroke="#0c0c0d" strokeWidth={2} cursor="pointer"
-            onClick={(d) => {
-              const id = (d as unknown as { payload?: ScatterPoint }).payload?.id;
-              if (id) router.push(`/ipos/${id}`);
-            }} />
+          <ReferenceLine y={50} stroke="#313945" strokeDasharray="4 4" />
+          <ReferenceLine x={50} stroke="#313945" strokeDasharray="4 4" />
+          <Tooltip {...tooltipStyle} content={({ payload }) => {
+                     const p = payload?.[0]?.payload as ScatterPoint | undefined;
+                     return p ? <div className="rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-xs text-ink"><div className="font-semibold text-ink">{p.name}</div>
+                       <div>Score {fmtNum(p.score, 1)} · risk {fmtNum(p.risk, 1)}</div><div className="text-ink-3">{p.sector}</div></div> : null;
+                   }} />
+          {groups.length > 1 && <Legend wrapperStyle={legendStyle} verticalAlign="top" />}
+          {groups.map((g) => (
+            <Scatter key={g.label} name={g.label} data={g.data} fill={g.color} stroke="#11141a" strokeWidth={2} cursor="pointer"
+                     onClick={(item) => {
+                       const id = (item as unknown as { payload?: ScatterPoint }).payload?.id;
+                       if (id) router.push(`/ipos/${id}`);
+                     }} />
+          ))}
         </ScatterChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-export function CountBarChart({ data, labelKey, valueKey, label }: { data: Record<string, string | number>[]; labelKey: string; valueKey: string; label: string }) {
+/** Simple counts by category (single series). */
+export function CountBarChart({ data, labelKey, valueKey, label, color = SERIES[0], height = 220 }: {
+  data: Record<string, string | number>[]; labelKey: string; valueKey: string; label: string; color?: string; height?: number;
+}) {
   return (
-    <div style={{ height: Math.max(160, data.length * 34 + 40) }} role="img" aria-label={label}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+    <div className="w-full" style={{ height }} role="img" aria-label={label}>
+      <ResponsiveContainer>
+        <BarChart data={data} layout="vertical" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
           <CartesianGrid stroke={GRID} horizontal={false} />
-          <XAxis type="number" allowDecimals={false} tick={AXIS} tickLine={false} axisLine={false} />
-          <YAxis type="category" dataKey={labelKey} tick={AXIS} tickLine={false} axisLine={false} width={130} />
-          <Tooltip {...tooltipStyle} />
-          <Bar dataKey={valueKey} name={label} fill={SERIES[0]} radius={[0, 4, 4, 0]} maxBarSize={18} />
+          <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} allowDecimals={false} />
+          <YAxis type="category" dataKey={labelKey} tick={{ ...AXIS, fill: "#aab3c0" }} width={150} axisLine={false} tickLine={false} />
+          <Tooltip {...tooltipStyle} formatter={(v) => [String(v), label]} />
+          <Bar dataKey={valueKey} fill={color} radius={[0, 4, 4, 0]} maxBarSize={18} />
         </BarChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-/** Peer multiples as a strip with the IPO's multiple and the p25–p75 range. */
-export function PeerDistributionChart({ peers, ipoMultiple, low, high, median, label }: {
-  peers: PeerRow[];
-  ipoMultiple: number;
-  low: number;
-  high: number;
-  median: number;
-  label: string;
-}) {
-  const data = [
-    ...peers.filter((p) => p.value !== null).map((p) => ({ name: p.name, value: p.value as number, kind: p.used ? "Peer (used)" : "Peer (excluded)" })),
-    { name: "This IPO", value: ipoMultiple, kind: "IPO" },
-  ].sort((a, b) => a.value - b.value);
+/** IPO openings per month, mainboard and SME stacked (one axis, counts). */
+export function ActivityChart({ data }: { data: DashboardSummary["activity"] }) {
+  const rows = data.map((d) => ({ ...d, label: new Date(`${d.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "2-digit" }) }));
   return (
-    <div className="h-64" role="img" aria-label={`${label} of peers compared with the IPO`}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
+    <div className="h-56 w-full" role="img" aria-label="IPO openings per month">
+      <ResponsiveContainer>
+        <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
-          <XAxis dataKey="name" tick={{ ...AXIS, fontSize: 11 }} tickLine={false} interval={0} angle={-20} textAnchor="end" height={60} />
-          <YAxis tick={AXIS} tickLine={false} axisLine={false} width={48} label={{ value: `${label} (x)`, angle: -90, position: "insideLeft", fill: "#64748b", fontSize: 12 }} />
-          <ReferenceLine y={low} stroke={SERIES[2]} strokeDasharray="4 4" label={{ value: "p25", fill: "#94a3b8", fontSize: 11, position: "right" }} />
-          <ReferenceLine y={median} stroke="rgba(255,255,255,0.35)" label={{ value: "median", fill: "#94a3b8", fontSize: 11, position: "right" }} />
-          <ReferenceLine y={high} stroke={SERIES[1]} strokeDasharray="4 4" label={{ value: "p75", fill: "#94a3b8", fontSize: 11, position: "right" }} />
-          <Tooltip {...tooltipStyle} formatter={(v, _n, item) => [`${typeof v === "number" ? v.toFixed(2) : v}x`, (item?.payload as { kind?: string })?.kind ?? ""]} />
-          <Bar dataKey="value" radius={[4, 4, 0, 0]} maxBarSize={36}>
-            {data.map((d) => (
-              <Cell key={d.name} fill={d.kind === "IPO" ? SERIES[3] : d.kind === "Peer (used)" ? SERIES[0] : "#334155"} />
-            ))}
+          <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} />
+          <YAxis tick={AXIS} axisLine={false} tickLine={false} width={32} allowDecimals={false} />
+          <Tooltip {...tooltipStyle} />
+          <Legend wrapperStyle={legendStyle} />
+          <Bar dataKey="mainboard" name="Mainboard" stackId="a" fill={SERIES[0]} maxBarSize={30} />
+          <Bar dataKey="sme" name="SME" stackId="a" fill={SERIES[1]} radius={[4, 4, 0, 0]} maxBarSize={30} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Listing-day return per recent listing (diverging around zero). */
+export function ListingReturnsChart({ items }: { items: { name: string; ret: number; date: string }[] }) {
+  return (
+    <div className="h-64 w-full" role="img" aria-label="Listing-day returns of recent listings">
+      <ResponsiveContainer>
+        <BarChart data={items} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis dataKey="name" tick={false} axisLine={false} />
+          <YAxis tick={AXIS} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} />
+          <ReferenceLine y={0} stroke="#313945" />
+          <Tooltip {...tooltipStyle} formatter={(v) => [`${fmtNum(Number(v), 2)}%`, "Listing-day return"]} labelFormatter={(l, p) => `${l} · ${p?.[0]?.payload?.date ?? ""}`} />
+          <Bar dataKey="ret" radius={[4, 4, 0, 0]} maxBarSize={22}>
+            {items.map((d) => <Cell key={d.name} fill={d.ret >= 0 ? POS : NEG} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Peer multiples with the IPO's multiple and the peer median as reference lines. */
+export function PeerMultipleChart({ peers, ipo, median, label }: { peers: { name: string; value: number }[]; ipo: number | null; median: number | null; label: string }) {
+  return (
+    <div className="h-56 w-full" role="img" aria-label={`${label} of listed peers compared with the IPO`}>
+      <ResponsiveContainer>
+        <BarChart data={peers} layout="vertical" margin={{ top: 0, right: 24, left: 8, bottom: 0 }}>
+          <CartesianGrid stroke={GRID} horizontal={false} />
+          <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}x`} />
+          <YAxis type="category" dataKey="name" tick={{ ...AXIS, fill: "#aab3c0" }} width={170} axisLine={false} tickLine={false} />
+          <Tooltip {...tooltipStyle} formatter={(v) => [`${fmtNum(Number(v), 2)}x`, label]} />
+          <Bar dataKey="value" fill={SERIES[0]} radius={[0, 4, 4, 0]} maxBarSize={16} />
+          {median !== null && <ReferenceLine x={median} stroke="#aab3c0" strokeDasharray="4 4" label={{ value: `median ${fmtNum(median, 1)}x`, fill: "#aab3c0", fontSize: 11, position: "top" }} />}
+          {ipo !== null && <ReferenceLine x={ipo} stroke={SERIES[3]} strokeWidth={2} label={{ value: `IPO ${fmtNum(ipo, 1)}x`, fill: SERIES[3], fontSize: 11, position: "insideBottomRight" }} />}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Pre-listing fundamental score (x) against listing gain (y); one dot per listed IPO. */
+export function OutcomeScatter({ points }: { points: { id: number; name: string; score: number; gain: number }[] }) {
+  const router = useRouter();
+  return (
+    <div className="h-72 w-full" role="img" aria-label="Pre-listing fundamental score versus listing gain">
+      <ResponsiveContainer>
+        <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 16 }}>
+          <CartesianGrid stroke={GRID} />
+          <XAxis type="number" dataKey="score" name="Score" domain={[0, 100]} tick={AXIS}
+                 label={{ value: "Pre-listing fundamental score", position: "insideBottom", offset: -8, fill: INK_3, fontSize: 11 }} />
+          <YAxis type="number" dataKey="gain" name="Listing gain" tick={AXIS} width={48} tickFormatter={(v) => `${v}%`} />
+          <ZAxis range={[80, 80]} />
+          <ReferenceLine y={0} stroke="#313945" />
+          <Tooltip {...tooltipStyle} content={({ payload }) => {
+                     const p = payload?.[0]?.payload as { name: string; score: number; gain: number } | undefined;
+                     return p ? <div className="rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-xs text-ink"><div className="font-semibold">{p.name}</div>
+                       <div className="text-ink-2">Score {fmtNum(p.score, 1)} · listing gain {fmtNum(p.gain, 1)}%</div></div> : null;
+                   }} />
+          <Scatter data={points} fill={SERIES[0]} stroke="#11141a" strokeWidth={2} cursor="pointer"
+                   onClick={(item) => {
+                     const id = (item as unknown as { payload?: { id: number } }).payload?.id;
+                     if (id) router.push(`/ipos/${id}`);
+                   }} />
+        </ScatterChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Signed values per category (e.g. median listing gain by sector): positive and negative bars around zero. */
+export function DivergingBarChart({ data, label, unit = "%", height = 240 }: { data: { name: string; value: number; n?: number }[]; label: string; unit?: string; height?: number }) {
+  return (
+    <div className="w-full" style={{ height }} role="img" aria-label={label}>
+      <ResponsiveContainer>
+        <BarChart data={data} layout="vertical" margin={{ top: 0, right: 24, left: 8, bottom: 0 }}>
+          <CartesianGrid stroke={GRID} horizontal={false} />
+          <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}${unit}`} />
+          <YAxis type="category" dataKey="name" tick={{ ...AXIS, fill: "#aab3c0" }} width={170} axisLine={false} tickLine={false} />
+          <ReferenceLine x={0} stroke="#313945" />
+          <Tooltip {...tooltipStyle} formatter={(v, _n, p) => [`${fmtNum(Number(v), 1)}${unit}${(p?.payload as { n?: number })?.n ? ` (n=${(p?.payload as { n?: number }).n})` : ""}`, label]} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={16}>
+            {data.map((d) => <Cell key={d.name} fill={d.value >= 0 ? POS : NEG} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>

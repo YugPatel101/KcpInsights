@@ -45,9 +45,9 @@ export default function SignupPage() {
           {formState.isSubmitting ? "Creating…" : "Create Account"}
         </KcpButton>
 
-        <p className="text-center text-sm text-slate-400">
+        <p className="text-center text-sm text-ink-2">
           Already have an account?{" "}
-          <Link href="/login" className="font-semibold text-white hover:underline">
+          <Link href="/login" className="font-semibold text-ink hover:underline">
             Sign In
           </Link>
         </p>

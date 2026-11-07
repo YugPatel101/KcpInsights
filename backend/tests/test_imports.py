@@ -82,7 +82,7 @@ def test_bundle_warnings_and_commit_with_unit_conversion(client, db):
     assert ipo["data_mode"] == "imported" and ipo["data_status"] == "imported"
     assert client.get(f"/api/ipos/{ipo['id']}").json()["can_edit"] is True
     s = client.get(f"/api/ipos/{ipo['id']}/scores").json()
-    assert s["status"] == "incomplete" and s["coverage"] > 0  # imported evidence earns credit; not enough data to score
+    assert s["status"] in ("insufficient", "partial") and s["coverage"] > 0  # imported figures count; two periods are not enough for every score
 
 
 def test_non_admin_cannot_mark_verified(client, db):

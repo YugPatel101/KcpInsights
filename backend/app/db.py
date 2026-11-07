@@ -17,7 +17,8 @@ class Base(DeclarativeBase):
 def make_engine(url: str) -> Engine:
     kwargs: dict = {"future": True}
     if url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False}
+        # the API, the CLI and a separate worker may write at the same time: wait up to 30 s for SQLite's write lock
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
     engine = create_engine(url, **kwargs)
     if url.startswith("sqlite"):
 
@@ -26,6 +27,7 @@ def make_engine(url: str) -> Engine:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA foreign_keys=ON")
             cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
             cur.close()
 
     return engine

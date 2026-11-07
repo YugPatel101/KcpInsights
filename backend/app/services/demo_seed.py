@@ -386,5 +386,5 @@ def seed_demo(db: Session, *, reset: bool = False, today: date | None = None) ->
     ).scalars().first()
     if aravalli is not None and not db.execute(select(SourceDocument).where(SourceDocument.ipo_id == aravalli.id)).first():
         ingest_text_document(db, ipo_id=aravalli.id, title="Aravalli Specialty Chemicals — RHP excerpt (SYNTHETIC)",
-                             doc_type="rhp", text=DEMO_DOCUMENT, source_url=None, user_id=None, data_status="synthetic", embed=False)
+                             doc_type="rhp", text=DEMO_DOCUMENT, source_url=None, user_id=None, data_status="synthetic")
     return result

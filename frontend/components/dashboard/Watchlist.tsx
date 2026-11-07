@@ -5,10 +5,10 @@ import type { IpoSummary } from "@/lib/types";
 
 export default function Watchlist({ items, signedIn }: { items: IpoSummary[]; signedIn: boolean }) {
   if (!signedIn) {
-    return <EmptyState title="Sign in to keep a watchlist" body="Watchlists, reports and research conversations are saved per account." action={<Link className="text-sky-300 hover:underline" href="/login?next=/dashboard">Sign in</Link>} />;
+    return <EmptyState title="Sign in to keep a watchlist" body="Watchlists, reports and research conversations are saved per account." action={<Link className="text-brand-ink hover:underline" href="/login?next=/dashboard">Sign in</Link>} />;
   }
   if (!items.length) {
-    return <EmptyState title="Your watchlist is empty" body="Use “Watch” on any IPO research page to follow it here." action={<Link className="text-sky-300 hover:underline" href="/ipos">Browse IPOs</Link>} />;
+    return <EmptyState title="Your watchlist is empty" body="Use “Watch” on any IPO research page to follow it here." action={<Link className="text-brand-ink hover:underline" href="/ipos">Browse IPOs</Link>} />;
   }
   return (
     <div className="space-y-3">

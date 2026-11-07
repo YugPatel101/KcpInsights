@@ -4,6 +4,31 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* KcpInsights design tokens — one dark theme, tuned for dense financial tables.
+   Surfaces step up in lightness; ink steps down; semantic colours are reserved for meaning
+   (positive / negative / caution) and never reused as series colours. */
+@theme {
+  --color-canvas: #0a0c0f;
+  --color-surface: #11141a;
+  --color-surface-2: #161a21;
+  --color-surface-3: #1c212a;
+  --color-line: #232933;
+  --color-line-strong: #313945;
+  --color-ink: #e8ebf0;
+  --color-ink-2: #aab3c0;
+  --color-ink-3: #727d8c;
+  --color-brand: #3987e5;
+  --color-brand-ink: #8cbcf3;
+  --color-pos: #34b27d;
+  --color-pos-ink: #7fd8b0;
+  --color-neg: #e0614a;
+  --color-neg-ink: #f2a596;
+  --color-warn: #d4a017;
+  --color-warn-ink: #ecc96a;
+  --color-demo: #b25fd6;
+  --color-demo-ink: #dcaaf0;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -122,42 +147,28 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-canvas text-ink;
   }
   html {
     @apply font-sans;
+    color-scheme: dark;
+  }
+  /* figures line up in columns everywhere */
+  table, .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-brand) 40%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
   }
 }
 
-@keyframes floatLeft {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-
-  50% {
-    transform: translate(40px, -30px);
-  }
-}
-
-@keyframes floatRight {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-
-  50% {
-    transform: translate(-40px, 40px);
-  }
-}
-
-@keyframes floatCenter {
-  0%,
-  100% {
-    transform: translateY(0px);
-  }
-
-  50% {
-    transform: translateY(-50px);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

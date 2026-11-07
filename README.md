@@ -1,191 +1,168 @@
 # KcpInsights
 
-Educational IPO research platform for Indian mainboard and SME issues: transparent quantitative
-scoring, provenance-tracked data, scenario analysis, document retrieval and a tool-using research
-agent — **runs entirely on free, open-source software**, offline after setup, with an optional
-local AI model.
+**Indian IPO research built from the prospectus up.** KcpInsights discovers NSE mainboard and SME IPOs
+(and companies whose offer documents SEBI has just published), downloads each offer document, extracts
+and reconciles the restated balance sheet, profit and loss and cash flow statements, computes standard
+financial ratios with industry-aware rules, and scores every issue with a published, versioned
+methodology. Every figure traces back to its page; every gap says why it is a gap.
 
-> KcpInsights is for education. Scores are rule-based summaries of stored inputs, not investment
-> advice, not forecasts and not probabilities of listing gains.
+No paid services, API keys or AI models; no manual data entry. Runs fully on one machine.
+
+> KcpInsights provides educational financial research and quantitative analysis. Scores are
+> methodology-dependent, data may be incomplete or delayed, and the platform does not provide
+> personalized investment advice or guarantee IPO performance.
+
+## Features
+
+* **Automatic discovery** — NSE upcoming, open and listed issues (mainboard and SME); SEBI DRHP/RHP
+  filings, including companies NSE has not announced yet. Idempotent upserts with field-level
+  provenance, source precedence and a change log.
+* **Prospectus intelligence** — RHP archives from NSE (SEBI copy as fallback, duplicates detected by
+  SHA-256), statement tables rebuilt from PDF word positions, units converted to ₹ crore, periods
+  validated, accounting identities checked; local Tesseract OCR for scanned pages. Every figure is
+  stored with its page and the text as printed.
+* **Quantitative engine** — 40+ ratios (profitability, growth, liquidity, leverage, efficiency, cash
+  flow, valuation on post-issue shares), five component scores, a fundamental score Q, a separate risk
+  score with a governance sub-score, and **industry profiles** so lenders are not judged on current
+  ratios or EBITDA.
+* **Peers** — the issuer's own listed peers with quartile benchmarks, price dates, staleness flags and
+  the latest official close; similar IPOs on record.
+* **Issue details** — face value, price band, lot and one-lot value, issue size (fresh / offer for sale),
+  shares offered, shares before/after the issue, market cap and P/E at the issue price (P/E from unreconciled
+  statements is labelled unverified and never scored), promoter holding before and
+  after the issue, promoters, listing exchanges, ISIN, registrar, lead managers, website and the objects of
+  the issue — each with its source (NSE, the offer document page, an NSE filing, or a stated derivation) or
+  the reason it is empty. Where no source publishes a value yet, a calculation fills it with its method shown:
+  bidder shares, the final-price estimate before listing (with its base rate), a promoter-holding range around an
+  offer for sale, valuation against listed peers, and the proposed offer from a draft prospectus — labelled
+  *estimated* or *proposed* and never used in scores.
+* **Data completeness** — 60 registry fields per IPO, each available / estimated / unverified /
+  unavailable (with reason) / not applicable / not yet expected; analysis readiness; pipeline stage.
+* **Listing history** — listing-day open, high, low, close from the official bhavcopy; listing gain and
+  closing return; sector, type and size summaries; point-in-time score-versus-outcome analysis.
+* **Product UI** — market overview, discovery with filters and pagination, research page (overview,
+  statements, ratios, valuation, peers, risk, score breakdown, completeness, documents, sources),
+  financial-analysis workspace, comparison, calendar with confirmed/estimated dates, methodology and
+  system health.
+
+## Technology
+
+| Layer | Stack |
+|---|---|
+| Backend | Python 3.11+, FastAPI, SQLAlchemy 2, Alembic, APScheduler, httpx, PyMuPDF, Tesseract (optional), Argon2 |
+| Database | SQLite (WAL) |
+| Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Recharts 3, Zod |
+| Quality | pytest (136), vitest (14), Playwright end-to-end (24, installed Chrome), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
+
+## Architecture
+
+```
+ NSE JSON · NSE archives · SEBI filings
+            │  polite client (one request per host, ≥2.5 s apart, size caps, no anti-bot bypass)
+            ▼
+ scheduled jobs ──▶ issue upserts (provenance, precedence) ──▶ document pipeline
+                                                               discover → HEAD → download → hash/dedupe
+                                                               → extract (+OCR) → validate → store
+            ▼
+ quant engine (pure, versioned config, industry profiles) ──▶ stored scores · cached completeness
+            ▼
+ FastAPI (reads the database only) ◀── /api proxy ── Next.js app ◀── browser
+```
+
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quick start (macOS / Linux)
 
-Prerequisites: Python 3.11+, Node.js 20+, npm. No API keys, accounts or AI model needed.
+Prerequisites: Python 3.11+, Node.js 20+, npm. Optional: `brew install tesseract` (or
+`sudo apt install tesseract-ocr`) to read scanned prospectuses.
 
 ```bash
 scripts/dev.sh
 ```
 
-Open http://localhost:3000. The first run creates `backend/.venv`, installs dependencies, migrates
-the SQLite database and loads the **synthetic demo fixture** (10 fictional companies, clearly
-labelled). API docs: http://127.0.0.1:8000/api/docs.
+Open http://localhost:3000 (API docs: http://127.0.0.1:8000/api/docs). The first run creates
+`backend/.venv`, installs dependencies, migrates the database and loads a clearly labelled synthetic
+demo, which is hidden automatically once real data arrives. The scheduler starts syncing NSE about 15
+seconds after the API starts and reads offer documents from about 5 minutes after.
 
-Port 8000 busy? `KCP_API_PORT=8001 scripts/dev.sh` (`KCP_WEB_PORT` for the web port).
-Start without demo data: `KCP_SKIP_DEMO=1 scripts/dev.sh`.
-
-### Manual setup
+Manual setup:
 
 ```bash
-cd backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env
-.venv/bin/python -m app.cli migrate          # Alembic migrations
-.venv/bin/python -m app.cli seed-demo        # optional synthetic demo (--reset refreshes dates)
-.venv/bin/python -m app.cli create-admin     # optional first administrator (prompts for password)
-.venv/bin/uvicorn app.main:app --port 8000
-
-cd ../frontend
-npm install
-npm run dev                                  # proxies /api/* to KCP_API_URL (default 127.0.0.1:8000)
+cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && cp .env.example .env && .venv/bin/python -m app.cli migrate
+```
+```bash
+cd backend && .venv/bin/uvicorn app.main:app --port 8000
+```
+```bash
+cd frontend && npm install && npm run dev
 ```
 
-Other CLI commands: `reset-password <email>`, `ingest <file.pdf> --ipo-id N --url …`,
-`train-model [--synthetic]`.
+Useful commands (from `backend/`): `python -m app.cli sync`, `process-documents --limit 20`,
+`backfill-history --days 365`, `fill-gaps`, `reclassify`, `refresh-scores`, `backup`, `health`, `create-admin`,
+`e2e-demo BCSSL`. To keep it running unattended on a Mac: `scripts/service.sh install` (see docs/DEPLOYMENT.md).
 
-## What's inside
+## Screenshots
 
+Run the app and capture: `/` (landing), `/dashboard`, `/ipos`, `/ipos/<id>` (try the *Peers* and *Data
+completeness* tabs), `/history`, `/methodology`, `/data`. The pages render from live data, so
+screenshots reflect the current market.
+
+## Tests
+
+```bash
+cd backend && .venv/bin/python -m pytest && .venv/bin/ruff check app tests && .venv/bin/mypy app
 ```
-backend/                     FastAPI + SQLAlchemy + Alembic (Python)
-  app/services/
-    scoring_config.py        versioned weights & thresholds (single source of truth)
-    normalization.py         bounded linear normalisation, percentiles
-    financial_metrics.py     margins, ROE/ROCE, CAGR, cash conversion, leverage (edge-case rules)
-    scoring_engine.py        Q, V, R, composite S, evidence coverage C — pure & deterministic
-    scenario.py              bear/base/bull equity-value scenarios
-    prediction.py            optional listing-outcome baselines + chronological backtests
-    import_service.py        validated JSON bundle / CSV import with provenance & versioning
-    demo_seed.py             Mode A synthetic fixture (fictional companies)
-    rag.py                   PDF/text ingestion, page-cited chunks, embeddings or BM25, injection flags
-    llm_provider.py          Ollama (local) / optional OpenAI-compatible / deterministic fallback
-    source_adapters.py       Mode C allow-listed official-document fetcher (SSRF-safe, robots.txt)
-    report_service.py        12-section source-linked research reports
-  app/agents/                bounded tool-using research agent, 13 typed tools, output validation
-  app/api/routes/            REST endpoints (OpenAPI at /api/docs)
-  alembic/                   migrations
-  tests/                     pytest (engine hand-calculations, API, auth, agent, RAG, SSRF, …)
-frontend/                    Next.js 16 App Router + React 19 + Tailwind 4 + Recharts + Zod + RHF
-  app/(app)/                 dashboard, ipos, ipos/[id], analysis, compare, workspace, reports,
-                             watchlist, import, settings
-  components/                KcpInsights UI (existing identity preserved), charts, IPO panels
-  lib/                       typed API client, auth context, formatters, Zod schemas
-  tests/                     vitest
-docs/METHODOLOGY.md          every formula, weight, threshold and edge rule
-scripts/dev.sh               one-command local launcher
+```bash
+cd frontend && npm test && npm run lint && npm run typecheck && npm run build:check && npm run test:e2e
 ```
 
-The browser only talks to the Next.js origin; `/api/*` is proxied to FastAPI, so the session
-cookie is first-party (HttpOnly, SameSite=Lax, Secure in production).
+What is covered and how the last run went: [docs/TESTING.md](docs/TESTING.md). A full real-IPO run —
+discovery, download, extraction, validation, ratios, score, provenance and an idempotent second run —
+is recorded in [docs/E2E_DEMONSTRATION.md](docs/E2E_DEMONSTRATION.md).
 
-## Data modes
+## Data sources
 
-| Mode | What | Label |
+| Source | Access | Provides |
 |---|---|---|
-| A — Demo | Synthetic fixture, 10 fictional companies with dates relative to today | `SYNTHETIC` / `demo` everywhere; earns 0 % evidence coverage |
-| B — Imported | Your JSON bundles / CSV statements from offer documents | `imported` (admins may mark `verified`) |
-| C — Source-connected | Admin fetches an official SEBI/NSE/BSE URL; ingested as a document | source URL + retrieval time |
+| NSE public issue information | automatic | issue terms, dates, subscription, final price, listing date |
+| NSE bhavcopy and equity lists | automatic | listing-day open/high/low/close; peer prices; face value and ISIN fallback |
+| NSE shareholding-pattern filings | automatic | official post-issue and latest promoter holding |
+| Offer documents (NSE archives) | automatic | restated statements, peers, disclosures, business overview, industry |
+| SEBI DRHP/RHP filings | automatic | new filings; fallback prospectus copy |
+| BSE | blocked for automated access | manual import |
+| Moneycontrol | blocked for automated access (HTTP 403) | used only as a checklist of fields an IPO page should show |
 
-### Importing real research (Mode B)
+Full detail, verification dates and request discipline: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+Field-by-field sources and checks: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md).
 
-1. Sign in → **Import data** → download the JSON bundle or CSV template.
-2. Fill it from the RHP/DRHP (restated financials, issue structure, peers, risk factors), giving
-   each record a `source_key` with a title and URL.
-3. Upload → **Validate (dry run)** → review errors/warnings (missing fields, invalid dates, unit
-   problems, duplicates, accounting checks) → **Commit**.
-
-Units (`crore`, `lakh`, `million`, `billion`, `thousand`, `rupees`) are converted to INR crore with
-the raw values preserved. Missing fields stay missing. A verified period is never overwritten by
-unverified data; changed values create a new version. Upload offer-document PDFs on the IPO page
-(Documents tab) to enable cited retrieval.
-
-NSE frequently blocks automated requests; KcpInsights never bypasses CAPTCHAs, logins or
-anti-bot controls — download manually and upload instead.
-
-## Optional local AI (free)
-
-```bash
-# install Ollama from https://ollama.com, then:
-ollama pull qwen2.5:3b            # ~2 GB, needs ~4 GB free RAM
-ollama pull nomic-embed-text      # optional: semantic document search
-```
-
-Low-memory machines: set `KCP_OLLAMA_USE_SMALL_MODEL=true` in `backend/.env` (`qwen2.5:1.5b`).
-Any Ollama instruction model works via `KCP_OLLAMA_MODEL`. Settings → **Re-check providers**
-confirms health; the app never claims a model is available until the health check passes and the
-model is present.
-
-Without a model, the agent and reports use the **deterministic research engine** (templated from
-the same tools; labelled as non-generative). With a model, the agent may request extra tools for
-≤ 6 steps; its answers are validated — citations must resolve to tool evidence, numbers must
-appear in tool results, otherwise points are dropped or the deterministic answer is used. The
-model never computes scores.
-
-## How scoring works
+## Methodology
 
 ```
-Q = 0.25·Profitability + 0.20·Growth + 0.20·Cash flow + 0.20·Balance sheet + 0.15·Stability
-V = 100 · clip((p75 − IPO multiple) / (p75 − p25))       vs. a stated, dated peer set
-R = 0.25·Financial + 0.20·Valuation + 0.20·Governance + 0.20·Market + 0.15·Data quality
-S = 0.45·Q + 0.30·V + 0.25·(100 − R)                     not calculated if any part is missing
-C = 100 · Σ wᵢIᵢ / Σ wᵢ                                   admissible-evidence coverage
+Q = 0.25·Profitability + 0.25·Growth + 0.20·Financial health + 0.15·Cash flow + 0.15·Valuation
 ```
 
-Each metric is normalised with documented thresholds; zero/negative earnings, negative equity,
-missing periods and stale data are handled by explicit rules. Full detail:
-[docs/METHODOLOGY.md](docs/METHODOLOGY.md). Every score breakdown in the UI (Quant scores tab,
-Quant analysis page) shows value → formula → thresholds → periods → source.
+Each component is a weighted average of ratios normalised to 0–100 between published reference
+values; Q is issued only when the required components are computable from verified statements; risk
+(0–100, higher = more risk) is separate. Weights are educational judgements, not fitted predictors.
+[docs/SCORING_METHODOLOGY.md](docs/SCORING_METHODOLOGY.md) · [docs/FINANCIAL_FORMULAS.md](docs/FINANCIAL_FORMULAS.md) ·
+the in-app **Methodology** page renders the active configuration.
 
-## Tests and checks
+## Limitations
 
-```bash
-cd backend && .venv/bin/python -m pytest      # 66 tests
-cd backend && .venv/bin/ruff check . && .venv/bin/mypy app
-cd frontend && npm test && npm run lint && npm run typecheck && npx next build
-```
+* BSE refuses automated requests; BSE-only issues need a manual import.
+* Only the first page of SEBI's filing lists is read; litigation and promoter holding are not extracted.
+* Prospectuses that defeat both the text layer and OCR stay *unavailable*; OCR figures are never scored.
+* Lenders' asset-quality ratios come from unverifiable KPI tables, so a lender's Q stays incomplete.
+* The industry classifier is phrase-based and declines close calls; sector names mix NSE's labels with
+  the classifier's.
+* Listing history covers issues discovered so far (backfill extends it); results are descriptive, not predictive.
+* Data is fresh only while the API process runs (`scripts/service.sh install` keeps it running on a Mac);
+  free sleeping hosts cannot run the pipeline 24/7.
 
-Core tests use mocked providers — no network, no downloaded model. They cover hand-calculated
-formulas, normalisation bounds, CAGR edge cases, unit conversion, valuation with negative
-earnings and thin peer sets, risk aggregation and double-count rules, coverage, reproducibility,
-config validation, scenarios, imports, migrations, auth/CSRF/rate limits, authorization boundaries,
-agent tool validation, model timeouts/invalid output/fallback, fabricated numbers and citations,
-prompt injection via documents, retrieval thresholds, look-ahead-free features, and SSRF.
+## Documentation
 
-## Security
-
-Argon2id password hashing; opaque session tokens stored as SHA-256; HttpOnly SameSite=Lax cookies
-(Secure in production); idle + absolute expiry; CSRF token on every state-changing request plus an
-Origin check; per-user authorization on reports, conversations and watchlists (other users get
-404); rate limits on login, registration, agent, reports, imports and uploads; upload size/type
-limits and PDF page caps; SQLAlchemy ORM only (no raw SQL from input); model output rendered as
-text, never HTML; SSRF-safe allow-listed fetching; secrets only from environment; sensitive values
-redacted from logs; audit log for auth, imports, reports, edits, config changes and every agent
-tool call. The agent has no filesystem, shell, network or SQL access.
-
-**Known limitations:** rate limiting is in-process (single worker); no e-mail verification or
-self-service password reset (use `app.cli reset-password`); no MFA; SQLite suits single-user/local
-use; `pip-audit` / `npm audit` are not wired into CI; PDF parsing uses pypdf without a sandbox.
-
-## Free deployment options
-
-Honest summary: **the best fully-free setup is local** (`scripts/dev.sh`), which includes free local AI.
-
-| Piece | Free option | Restrictions (verify current terms) |
-|---|---|---|
-| Frontend | Vercel Hobby or Netlify free | Non-commercial (Vercel Hobby); set `KCP_API_URL` to the backend URL |
-| Backend | Render free web service (Docker: `backend/Dockerfile`) or Hugging Face Spaces (Docker) | Sleeps when idle (cold starts); **ephemeral disk — SQLite is wiped on restart/redeploy**; no Ollama (deterministic engine only) |
-| Database | Neon or Supabase free Postgres (`KCP_DATABASE_URL`) | Storage/compute caps; add a Postgres driver (`psycopg[binary]`) |
-
-For a cloud deployment set `KCP_ENVIRONMENT=production` and add the frontend origin to
-`KCP_CORS_ORIGINS`. Hosts that require a credit card (e.g. Oracle Cloud, Fly.io) are not
-recommended here. Free-tier terms change; check each provider before relying on it.
-
-## Troubleshooting
-
-* **"Cannot reach the KcpInsights API"** — backend not running or on another port; start
-  `scripts/dev.sh` or set `KCP_API_URL`.
-* **Port already in use** — `KCP_API_PORT=8001 scripts/dev.sh`.
-* **AI shows "deterministic"** — Ollama not running (`ollama serve`) or model not pulled; Settings
-  shows the exact reason.
-* **Demo dates look old** — `backend/.venv/bin/python -m app.cli seed-demo --reset` (in `backend/`).
-* **Valuation "unavailable"** — fewer than 3 dated peers with a positive multiple, or earnings not
-  positive; the Quant scores tab lists each attempt and reason.
-* **Import rejected** — run a dry run and read the validation report; dates must be `YYYY-MM-DD`.
+[Architecture](docs/ARCHITECTURE.md) · [Data sources](docs/DATA_SOURCES.md) · [Data dictionary](docs/DATA_DICTIONARY.md) ·
+[Scoring methodology](docs/SCORING_METHODOLOGY.md) · [Financial formulas](docs/FINANCIAL_FORMULAS.md) ·
+[API](docs/API_DOCUMENTATION.md) · [Deployment](docs/DEPLOYMENT.md) · [Security](docs/SECURITY.md) ·
+[Testing](docs/TESTING.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Technical audit](docs/AUDIT.md) ·
+[End-to-end demonstration](docs/E2E_DEMONSTRATION.md)

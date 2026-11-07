@@ -51,7 +51,8 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
       credentials: "same-origin",
       body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
       signal: opts.signal,
-      cache: "no-store",
+      // GETs revalidate with the API's ETag (304 when unchanged); writes are never cached
+      cache: method === "GET" ? "no-cache" : "no-store",
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;

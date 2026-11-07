@@ -5,11 +5,13 @@ import type { NextConfig } from "next";
 const API_ORIGIN = process.env.KCP_API_URL ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // A production build can be checked while `next dev` runs: both default to .next and must not share it.
+  distDir: process.env.KCP_NEXT_DIST_DIR || ".next",
   poweredByHeader: false,
   // Pin the root: a stray lockfile in a parent directory must not change module resolution.
   turbopack: { root: process.cwd() },
   experimental: {
-    // Local-model agent calls can take longer than the 30 s default proxy timeout.
+    // An administrator's "reprocess document" request (extraction, OCR of scanned pages) can exceed the 30 s default.
     proxyTimeout: 120_000,
   },
   async rewrites() {

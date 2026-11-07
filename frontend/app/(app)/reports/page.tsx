@@ -12,21 +12,21 @@ function ReportList() {
   const { data, error, loading, reload } = useApi<Paged<ReportListItem>>("/api/reports?page_size=100");
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (loading || !data) return <LoadingBlock />;
-  if (!data.items.length) return <EmptyState title="No reports yet" body="Generate a report from any IPO research page, or ask the AI workspace to “generate a research report”." action={<Link className="text-sky-300 hover:underline" href="/ipos">Browse IPOs</Link>} />;
+  if (!data.items.length) return <EmptyState title="No reports yet" body="Generate a report from any IPO research page." action={<Link className="text-brand-ink hover:underline" href="/ipos">Browse IPOs</Link>} />;
   return (
-    <div className="relative overflow-x-auto rounded-2xl border border-white/10">
+    <div className="relative overflow-x-auto rounded-xl border border-line">
       <table className="w-full min-w-[640px] text-sm">
-        <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-wider text-slate-500">
+        <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-ink-3">
           <tr><th className="px-4 py-3">Report</th><th className="px-3 py-3">Score</th><th className="px-3 py-3">Risk</th><th className="px-3 py-3">Generator</th><th className="px-3 py-3">Created</th><th className="px-4 py-3"><span className="sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {data.items.map((r) => (
-            <tr key={r.id} className="border-t border-white/5">
-              <td className="px-4 py-3"><Link href={`/reports/${r.id}`} className="font-medium text-white hover:underline">{r.title}</Link>{r.synthetic && <span className="ml-2"><DataStatusBadge status="synthetic" compact /></span>}</td>
+            <tr key={r.id} className="border-t border-line">
+              <td className="px-4 py-3"><Link href={`/reports/${r.id}`} className="font-medium text-ink hover:underline">{r.title}</Link>{r.synthetic && <span className="ml-2"><DataStatusBadge status="synthetic" compact /></span>}</td>
               <td className="px-3"><ScoreValue value={r.scores?.composite} /></td>
               <td className="px-3"><RiskBadge level={r.scores?.risk_level ?? null} /></td>
-              <td className="px-3 text-slate-400">{r.generator} · v{r.config_version}</td>
-              <td className="px-3 text-slate-400">{fmtDateTime(r.created_at)}</td>
+              <td className="px-3 text-ink-2">{r.generator} · v{r.config_version}</td>
+              <td className="px-3 text-ink-2">{fmtDateTime(r.created_at)}</td>
               <td className="px-4 text-right">
                 <button className={buttonClass.ghost} onClick={async () => { if (confirm("Delete this report?")) { await api(`/api/reports/${r.id}`, { method: "DELETE" }); reload(); } }}>Delete</button>
               </td>

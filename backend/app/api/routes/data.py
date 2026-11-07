@@ -162,9 +162,14 @@ async def upload_document(
 
 def _doc_out(d: SourceDocument) -> dict[str, Any]:
     return {"id": d.id, "ipo_id": d.ipo_id, "title": d.title, "doc_type": d.doc_type, "page_count": d.page_count,
-            "chunks": len(d.chunks), "source_url": d.source_url, "data_status": d.data_status,
-            "embedding_model": d.embedding_model, "retrieval_mode": "embedding" if d.embedding_model else "keyword",
-            "injection_flags": d.injection_flags, "retrieved_at": d.retrieved_at.isoformat()}
+            "chunks": len(d.chunks), "source_url": d.source_url, "archive_url": d.archive_url, "source_key": d.source_key,
+            "data_status": d.data_status, "retrieval_mode": "keyword", "injection_flags": d.injection_flags,
+            "retrieved_at": d.retrieved_at.isoformat(), "size_bytes": d.size_bytes, "sha256": d.sha256 or None,
+            "original_filename": d.original_filename, "original_retained": d.original_retained,
+            "extraction_status": d.extraction_status, "extraction_error": d.extraction_error,
+            "extracted_at": d.extracted_at.isoformat() if d.extracted_at else None, "parser_version": d.parser_version,
+            "last_checked_at": d.last_checked_at.isoformat() if d.last_checked_at else None,
+            "file_url": f"/api/documents/{d.id}/file" if d.original_retained and d.storage_key else None}
 
 
 @router.get("/documents")

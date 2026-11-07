@@ -1,8 +1,10 @@
 // Types mirroring the FastAPI responses. Keep in sync with backend/app/api/routes.
 
-export type DataStatus = "verified" | "imported" | "estimated" | "synthetic" | "unavailable";
-export type IpoStatus = "upcoming" | "open" | "closed" | "listed" | "withdrawn";
-export type RiskLevel = "low" | "moderate" | "high" | null;
+export type DataStatus = "verified" | "imported" | "estimated" | "synthetic" | "secondary_source" | "extracted" | "requires_review" | "unavailable";
+export type IpoStatus = "pipeline" | "upcoming" | "open" | "closed" | "listed" | "withdrawn";
+export type IpoStage = "pipeline" | "upcoming" | "open" | "awaiting_allotment" | "awaiting_listing" | "listing_unconfirmed" | "closed" | "listed" | "withdrawn";
+export type Readiness = "ready" | "partial" | "insufficient";
+export type RiskLevel = "low" | "moderate" | "elevated" | "high" | null;
 
 export interface SourceBrief {
   id: number;
@@ -14,26 +16,62 @@ export interface SourceBrief {
 }
 
 export interface ScoreSummary {
-  status: "complete" | "incomplete";
+  status: "complete" | "partial" | "insufficient";
   composite: number | null;
-  quality: number | null;
+  classification: string | null;
+  profitability: number | null;
+  growth: number | null;
+  financial_health: number | null;
+  cash_flow: number | null;
   valuation: number | null;
   risk: number | null;
   risk_level: RiskLevel;
-  coverage: number;
-  input_completeness: number;
-  valuation_multiple: string | null;
-  ipo_multiple: number | null;
+  coverage: number | null;
+  basis: string | null;
+  latest_period: string | null;
+  pe: number | null;
+  price_status: "verified" | "estimated" | null;
   config_version: string;
+  profile?: string | null;
+  governance_risk?: number | null;
+  calculated_at: string | null;
+}
+
+export interface CompletenessSummary {
+  overall_pct: number;
+  readiness: Readiness;
+  readiness_label: string;
+  groups: Record<string, number | null>;
+  missing: string[];
+  pipeline: Record<string, "done" | "pending" | "failed">;
 }
 
 export interface Subscription {
   as_of: string;
+  timezone?: string | null;
+  basis?: string;
   categories: Record<string, number>;
   data_status: DataStatus[];
 }
 
+export interface Freshness {
+  live: boolean;
+  last_verified_at: string | null;
+  is_stale: boolean;
+  stale_reasons: string[];
+  missing_critical: string[];
+  note?: string;
+}
+
+export interface KeyDate {
+  key: string;
+  label: string;
+  date: string | null;
+  status: DataStatus;
+}
+
 export interface IpoSummary {
+  stage: IpoStage;
   id: number;
   company_id: number;
   company_name: string;
@@ -51,12 +89,26 @@ export interface IpoSummary {
   final_issue_price: number | null;
   lot_size: number | null;
   min_investment_inr: number | null;
+  face_value?: number | null;
+  promoter_holding_pre_pct?: number | null;
+  promoter_holding_post_pct?: number | null;
   issue_size_cr: number | null;
   fresh_issue_cr: number | null;
   ofs_cr: number | null;
   listing_price: number | null;
+  listing_close_price?: number | null;
+  listing_price_basis?: string | null;
   listing_return_pct: number | null;
+  listing_close_return_pct?: number | null;
+  listing_high_price?: number | null;
+  listing_low_price?: number | null;
+  industry_profile?: string;
+  completeness_pct?: number | null;
+  completeness?: CompletenessSummary | null;
   listing_data_status: DataStatus | null;
+  listing_date_status?: "actual" | "expected" | null;
+  nse_symbol?: string | null;
+  freshness: Freshness;
   subscription: Subscription | null;
   data_mode: "demo" | "imported" | "source";
   data_status: DataStatus;
@@ -80,6 +132,30 @@ export interface Peer {
   selection_reason: string | null;
   data_status: DataStatus;
   source: SourceBrief | null;
+  basis?: string | null;
+  period_label?: string | null;
+  face_value?: number | null;
+  closing_price?: number | null;
+  eps_basic?: number | null;
+  eps_diluted?: number | null;
+  nav_per_share?: number | null;
+  ronw_pct?: number | null;
+  document_id?: number | null;
+  page?: number | null;
+  check_note?: string | null;
+  nse_symbol?: string | null;
+  latest_price?: number | null;
+  latest_price_date?: string | null;
+  pe_at_latest_price?: number | null;
+}
+
+export interface DocumentFact {
+  value: number | string;
+  page: number;
+  text: string;
+  basis: string | null;
+  document_id: number;
+  read_at: string;
 }
 
 export interface Disclosure {
@@ -105,6 +181,39 @@ export interface DocumentInfo {
   injection_flags: number;
   chunks?: number;
   retrieval_mode?: string;
+  archive_url?: string | null;
+  sha256?: string | null;
+  source_key?: string | null;
+  size_bytes?: number | null;
+  original_filename?: string | null;
+  original_retained?: boolean;
+  extraction_status?: "pending" | "extracted" | "partial" | "failed" | "not_found" | "skipped" | "duplicate";
+  extraction_method?: string | null;
+  attempts?: number;
+  next_attempt_at?: string | null;
+  published_date?: string | null;
+  extraction_error?: string | null;
+  extracted_at?: string | null;
+  parser_version?: string | null;
+  last_checked_at?: string | null;
+  file_url?: string | null;
+}
+
+export type IssueFactUnit = "text" | "inr" | "inr_range" | "cr" | "shares" | "pct" | "pct_range" | "pct_signed" | "x" | "list" | "url" | "split";
+
+/** One key issue fact with its source and status, or the reason it is missing (GET /api/ipos/{id} → issue_facts). */
+export interface IssueFact {
+  key: string;
+  label: string;
+  value: number | string | string[] | number[] | { fresh_cr: number | null; ofs_cr: number | null; fresh_shares?: number | null; ofs_shares?: number | null } | null;
+  unit: IssueFactUnit;
+  status: "verified" | "estimated" | "derived" | "proposed" | "unverified" | "unavailable" | "pending" | string;
+  source?: string | null;
+  basis?: string | null;
+  page?: number | null;
+  document_id?: number | null;
+  url?: string | null;
+  reason: string | null;
 }
 
 export interface IpoDetail extends IpoSummary {
@@ -114,19 +223,34 @@ export interface IpoDetail extends IpoSummary {
   website: string | null;
   customer_concentration_pct: number | null;
   face_value: number | null;
+  isin: string | null;
+  issue_method: "book_built" | "fixed_price" | null;
+  listing_exchanges: string | null;
   pre_issue_shares: number | null;
   post_issue_shares: number | null;
   dilution_pct: number | null;
   promoter_holding_pre_pct: number | null;
   promoter_holding_post_pct: number | null;
-  use_of_proceeds: { purpose: string; amount_cr: number }[] | null;
+  use_of_proceeds: { purpose: string; amount_cr: number | null }[] | null;
   risk_disclosures_reviewed: boolean;
   research_notes: string | null;
-  subscription_history: { as_of: string; category: string; times_subscribed: number; data_status: DataStatus }[];
+  registrar: string | null;
+  lead_managers: string | null;
+  offer_document_url: string | null;
+  basis_of_price_url: string | null;
+  issue_size_text: string | null;
+  shares_offered: number | null;
+  key_dates: KeyDate[];
+  subscription_history: { as_of: string; category: string; times_subscribed: number; basis?: string; data_status: DataStatus }[];
   grey_market: { caveat: string; observations: { observed_at: string; premium_inr: number; data_status: DataStatus }[] };
   peers: Peer[];
   disclosures: Disclosure[];
   documents: DocumentInfo[];
+  document_facts: Partial<Record<"pre_issue_shares" | "customer_concentration_pct" | "auditor_qualifications" | "contingent_liabilities_cr" | "business_overview", DocumentFact>> & {
+    lender_kpis?: Omit<DocumentFact, "value"> & { value: Record<string, { label: string; values_as_printed: string[]; page: number; note: string }> };
+  };
+  classification: Classification | null;
+  issue_facts?: IssueFact[];
   watchlisted: boolean;
   can_edit: boolean;
   scores: ScoreSummary;
@@ -139,169 +263,226 @@ export interface Paged<T> {
   page_size: number;
 }
 
-export const FIN_FIELDS = [
-  "revenue",
-  "ebitda",
-  "ebit",
-  "pat",
-  "operating_cash_flow",
-  "capex",
-  "interest_expense",
-  "total_assets",
-  "total_liabilities",
-  "total_debt",
-  "cash_and_equivalents",
-  "total_equity",
-  "current_assets",
-  "current_liabilities",
-] as const;
-export type FinField = (typeof FIN_FIELDS)[number];
+export type ComponentKey = "profitability" | "growth" | "financial_health" | "cash_flow" | "valuation";
 
-export type Statement = {
+export interface Statement {
   id: number;
   period_label: string;
   period_end: string;
   period_months: number;
   currency: string;
   unit: string;
-  derived: Record<string, number | null>;
+  basis: "consolidated" | "standalone" | "unknown";
   data_status: DataStatus;
+  validation_status: "passed" | "partial" | "failed" | "not_checked";
+  validation: { check: string; formula: string; lhs: number; rhs: number; difference: number; passed: boolean; hard: boolean }[];
+  document_id: number | null;
   source: SourceBrief | null;
-} & Record<FinField, number | null>;
+  [field: string]: unknown;
+}
 
-export interface MetricValue {
+export interface Metric {
   key: string;
   label: string;
   value: number | null;
   unit: string;
-  status: "ok" | "unavailable" | "not_meaningful";
   formula: string;
-  reason: string | null;
+  period: string | null;
   inputs: Record<string, unknown>;
-  periods: string[];
-  source_record_ids: number[];
-  score_override: number | null;
+  status: "ok" | "unavailable" | "not_meaningful" | "not_applicable";
+  reason: string | null;
+  note: string | null;
+}
+
+export interface RatioHistoryRow {
+  period: string;
+  period_end: string;
+  [key: string]: number | string | null;
 }
 
 export interface Financials {
   ipo_id: number;
   company_name: string;
+  currency: string;
   unit: string;
+  basis_used: string | null;
   statements: Statement[];
-  metrics: Record<string, MetricValue>;
+  metrics: Record<string, Metric>;
+  ratio_history: RatioHistoryRow[];
+  superseded: { id: number; period_label: string; basis: string; data_status: DataStatus; created_at: string; document_id: number | null }[];
+  formulas: Record<string, string>;
   note: string;
 }
 
-export interface ScoreItem {
-  key: string;
-  weight: number;
-  score: number | null;
-  evidence?: string;
-  value?: number | string | null;
-  normalization?: Record<string, number | string>;
-  metric?: MetricValue;
-}
-
-export interface Component {
-  name: string;
-  score: number | null;
-  status: "ok" | "unavailable";
-  weight: number;
-  weight_coverage: number;
-  reason: string | null;
-  items: ScoreItem[];
-}
-
-export interface PeerRow {
-  name: string;
-  ticker: string | null;
+export interface LineItem {
+  field: string;
+  raw_label: string;
+  raw_text: string;
+  unit: string;
   value: number | null;
-  as_of: string;
+  page: number | null;
+  status: "extracted" | "derived";
+  validation_status: string;
+}
+
+export interface StatementProvenance {
+  statement_id: number;
+  period_label: string;
+  basis: string;
   data_status: DataStatus;
-  used: boolean;
-  excluded_reason: string | null;
+  validation_status: string;
+  checks: Statement["validation"];
+  document_id: number | null;
+  items: LineItem[];
 }
 
-export interface ValuationResult {
-  score: number | null;
-  status: "ok" | "unavailable";
-  formula: string;
-  kind: string;
-  reason?: string;
-  flags: string[];
-  multiple?: string;
-  multiple_label?: string;
-  ipo_multiple?: number;
-  price_used?: number;
-  price_basis?: string;
-  market_cap_cr?: number;
-  peer_low?: number;
-  peer_high?: number;
-  peer_median?: number;
-  low_percentile?: number;
-  high_percentile?: number;
-  premium_to_median_pct?: number;
-  peers?: PeerRow[];
-  peer_selection?: string;
-  attempts: { multiple: string; used: boolean; reason?: string }[];
-  calculation_inputs?: Record<string, number | string>;
-}
-
-export interface EvidenceItem {
+export interface ComponentItem {
   key: string;
   weight: number;
-  present: boolean;
-  status: DataStatus;
-  credit: number;
+  score: number | null;
+  note: string | null;
+  available: boolean;
+  applicable?: boolean;
+}
+
+export interface ComponentResult {
+  name: ComponentKey;
+  label: string;
+  score: number | null;
+  coverage: number | null;
+  applicable?: boolean;
+  weights?: Record<string, number>;
+  items: ComponentItem[];
+  reason: string | null;
+}
+
+export interface Classification {
+  sector: string;
+  profile: string;
+  status: "extracted" | "unavailable";
+  confidence: number;
+  evidence: { phrase: string; count: number; pages: number[]; in_company_name?: boolean }[];
+  runner_up: string | null;
+  note: string | null;
+  method: string;
+  document_id?: number;
+  classified_at?: string;
+}
+
+export interface RiskComponent {
+  key: string;
+  label: string;
+  points: number | null;
+  weight: number;
+  kind: "derived from financials" | "derived from issue terms" | "disclosed fact" | "data quality";
+  detail: string | null;
+  available: boolean;
+  applicable?: boolean;
+}
+
+export interface Quartiles { min: number | null; q1: number | null; median: number | null; q3: number | null; max: number | null }
+
+export interface PeerSummary {
+  count: number;
+  with_pe: number;
+  with_pb: number;
+  min_peers: number;
+  median_pe: number | null;
+  median_pb: number | null;
+  median_ronw_pct: number | null;
+  pe_quartiles?: Quartiles | null;
+  pb_quartiles?: Quartiles | null;
+  ronw_quartiles?: Quartiles | null;
+  excluded_loss_making?: number;
+  basis: string[];
+  periods: string[];
   note: string | null;
 }
 
 export interface ScoreResult {
+  config_version: string;
+  status: "complete" | "partial" | "insufficient";
+  as_of: string;
+  basis: string | null;
+  periods_used: string[];
+  latest_period: string | null;
+  price: { price: number | null; price_basis: string | null; price_status: "verified" | "estimated" | null; post_issue_shares: number | null;
+           post_issue_shares_status: string | null; post_issue_shares_formula: string | null; market_cap_cr: number | null };
+  metrics: Record<string, Metric>;
+  components: Record<ComponentKey, ComponentResult>;
+  fundamental: { score: number | null; classification: string | null; weight_coverage: number; renormalized: boolean; excluded?: string[]; not_applicable?: string[];
+                 reason: string | null; formula: string; weights: Record<ComponentKey, number>; note?: string | null };
+  composite: number | null;
+  classification: string | null;
+  risk: { score: number | null; level: RiskLevel; components: RiskComponent[]; weight_coverage: number | null; formula: string;
+          governance_disclosure?: { score: number | null; components: string[]; available: number; of: number; formula: string; reason: string | null } };
+  profile?: { key: string; label: string };
+  applicability?: { key: string; label: string; reason: string }[];
+  period_sources?: { label: string; period_end: string; basis: string; data_status: DataStatus; validation_status: string; document_id: number | null; source_record_id: number | null }[];
+  peers: PeerSummary | null;
+  coverage: number | null;
+  missing: string[];
+  warnings: string[];
+  disclaimer: string;
+  input_fingerprint: string;
+  calculated_at: string | null;
+}
+
+export interface SensitivityRow {
+  label: string;
+  price: number;
+  pe: number | null;
+  pb: number | null;
+  ev_ebitda: number | null;
+  price_to_sales?: number | null;
+  market_cap_cr: number | null;
+  valuation_score: number | null;
+  fundamental_score: number | null;
+}
+
+export interface CalendarEvent {
+  date: string;
+  event: "open" | "close" | "allotment" | "refund" | "demat_credit" | "listing";
+  label: string;
+  status: "confirmed" | "estimated";
   ipo_id: number;
   company_name: string;
-  status: "complete" | "incomplete";
-  composite: number | null;
-  composite_formula: string;
-  composite_weights: { quality: number; valuation: number; risk_inverse: number };
-  missing_components: { component: string; reason: string }[];
-  quality: { score: number | null; status: string; formula: string; weights: Record<string, number>; components: Record<string, Component>; annual_periods_used: string[]; excluded_periods: { label: string; reason: string }[] };
-  valuation: ValuationResult;
-  risk: { score: number | null; status: string; level: RiskLevel; formula: string; weights: Record<string, number>; components: Record<string, Component> };
-  evidence: { coverage: number; input_completeness: number; formula: string; note: string; financials_stale: boolean; items: EvidenceItem[] };
-  coverage: number;
-  warnings: string[];
-  unavailable_metrics: { component: string; metric: string; reason: string }[];
-  provenance_source_record_ids: number[];
-  config_version: string;
-  input_fingerprint: string;
-  calculated_at: string;
-  is_probability: false;
-  disclaimer: string;
+  issue_type: "mainboard" | "sme";
+  ipo_status: IpoStatus;
+  stage: IpoStage;
+  data_mode: string;
+  price_band: [number | null, number | null] | null;
 }
 
-export interface Scenario {
-  name: "bear" | "base" | "bull";
-  status: "ok" | "unavailable";
-  assumptions: Record<string, number | string | null>;
-  steps?: Record<string, number | null>;
-  implied_price?: number;
-  implied_return_pct?: number;
-  reasons?: string[];
-}
-
-export interface ScenarioResult {
+export interface CalendarResponse {
+  start: string;
+  end: string;
+  today: string;
+  events: CalendarEvent[];
   note: string;
-  status: "ok" | "unavailable";
-  issue_price: number | null;
-  issue_price_basis: string;
-  post_issue_shares: number | null;
-  base_revenue_cr?: number;
-  base_period?: string;
-  derivation_notes?: Record<string, string>;
-  formulas: Record<string, string>;
-  scenarios: Scenario[];
-  reasons?: string[];
-  config_version: string;
+}
+
+export interface ExceptionsReport {
+  documents: { document_id: number; ipo_id: number | null; company_name: string | null; status: string; error: string | null; extracted_at: string | null; archive_url: string | null }[];
+  statements_requiring_review: { statement_id: number; ipo_id: number | null; company_name: string | null; period_label: string; basis: string;
+                                 failed_checks: { check: string; formula: string; difference: number }[] }[];
+  field_conflicts: { ipo_id: number; company_name: string | null; field: string; value: string; source_key: string; observed_at: string }[];
+  peer_rows_requiring_review: { ipo_id: number; company_name: string | null; peer: string; note: string | null; page: number | null }[];
+  documents_pending: number;
+  note: string;
+}
+
+export interface ExtractionRun {
+  id: number;
+  status: string;
+  parser_version: string;
+  started_at: string;
+  finished_at: string | null;
+  pages_scanned: number;
+  statements: { kind: string; page: number; basis: string; unit: string | null; title: string; periods: string[]; fields: string[] }[];
+  checks: { period: string; basis: string; status: string; checks: Statement["validation"] }[];
+  warnings: string[];
+  error: string | null;
 }
 
 export interface SourceRecord {
@@ -346,42 +527,14 @@ export interface Evidence {
   cited: boolean;
 }
 
-export interface ToolCall {
-  tool: string;
-  arguments: Record<string, unknown>;
-  status: "ok" | "error" | "rejected";
-  summary: string;
-  duration_ms: number;
-}
 
-export interface AgentAnswer {
-  summary: string;
-  points: { text: string; evidence: string[] }[];
-  limitations: string[];
-  follow_up_questions?: string[];
-}
 
-export interface AgentResponse {
-  answer: AgentAnswer;
-  answer_text: string;
-  mode: string;
-  generative: boolean;
-  intents: string[];
-  ipo_ids: number[];
-  evidence: Evidence[];
-  tool_calls: ToolCall[];
-  warnings: string[];
-  report_id: number | null;
-  conversation_id: number | null;
-  saved: boolean;
-  elapsed_ms: number;
-}
+
 
 export interface ReportSection {
   key: string;
   title: string;
   paragraphs: string[];
-  narrative?: string;
   facts: { label: string; value: string; status?: string; used?: boolean; excluded_reason?: string | null; reasons?: string[] }[];
   evidence: string[];
 }
@@ -394,9 +547,9 @@ export interface Report {
   generated_at: string;
   created_at?: string;
   generator: string;
-  llm: { used: boolean; reason?: string; model?: string; note?: string };
   config_version: string;
-  scores: { status: string; composite: number | null; quality: number | null; valuation: number | null; risk: number | null; risk_level: RiskLevel; coverage: number };
+  scores: { status: string; composite: number | null; classification: string | null; profitability: number | null; growth: number | null;
+            financial_health: number | null; cash_flow: number | null; valuation: number | null; risk: number | null; risk_level: RiskLevel; coverage: number };
   synthetic: boolean;
   sections: ReportSection[];
   citations: { id: string; kind: string; ref_id: number | string | null; label: string; url: string | null; data_status: DataStatus | null }[];
@@ -431,67 +584,298 @@ export interface ImportResponse {
   counts?: Record<string, number>;
 }
 
-export interface ProviderHealth {
-  name: string;
-  available: boolean;
-  model: string | null;
-  detail: string;
-  models_present: string[];
-  embedding_model: string | null;
-  embedding_available: boolean;
-}
 
 export interface ModelsStatus {
-  ai: {
-    configured_provider: string;
-    active_mode: string;
-    generative_available: boolean;
-    reason: string;
-    ollama: { base_url: string; model: string; small_model: string; using_small_model: boolean; embed_model: string };
-    providers: ProviderHealth[];
-    fallback: string;
-  };
-  retrieval: { chunks: number; embedded_chunks: number; mode: string };
+  retrieval: { chunks: number; mode: string };
   scoring: { active_version: string; description: string };
-  listing_model: {
-    models: {
-      id: number;
-      name: string;
-      version: string;
-      model_type: string;
-      dataset_kind: "real" | "synthetic";
-      status: string;
-      n_samples: number;
-      created_at: string;
-      label: string | null;
-      evaluations: { split: string; n: number; metrics: Record<string, unknown> }[];
-    }[];
-    real_listed_ipos: number;
-    min_samples: number;
-    warning: string;
-  };
 }
 
 export interface DashboardSummary {
   as_of: string;
-  totals: { ipos: number; by_status: Partial<Record<IpoStatus, number>>; documents: number; issue_size_open_upcoming_cr: number };
+  totals: { ipos: number; by_status: Partial<Record<IpoStatus, number>>; by_stage: Partial<Record<IpoStage, number>>; documents: number;
+            documents_extracted: number; scored: number; recently_listed_30d: number; issue_size_open_upcoming_cr: number;
+            pipeline?: number; recently_closed_14d?: number };
   data_modes: Record<string, number>;
+  demo_included: boolean;
+  demo_available: boolean;
   synthetic_share: number;
   upcoming: IpoSummary[];
+  awaiting: IpoSummary[];
+  recently_closed?: IpoSummary[];
   recently_listed: IpoSummary[];
-  scatter: { id: number; name: string; quality: number; risk: number; composite: number | null; data_status: DataStatus; sector: string }[];
+  pipeline?: IpoSummary[];
+  data_health?: { median_completeness: number | null; readiness: Record<Readiness, number>; distribution: { bucket: string; count: number }[]; not_computed: number };
+  calendar: { date: string; event: "opens" | "closes" | "lists"; estimated: boolean; ipo_id: number; company_name: string; issue_type: string }[];
+  activity: { month: string; mainboard: number; sme: number; issue_size_cr: number }[];
+  scatter: { id: number; name: string; score: number; risk: number; data_status: DataStatus; sector: string; issue_type: string }[];
+  score_distribution: { label: string; count: number }[];
+  risk_distribution: { level: Exclude<RiskLevel, null>; count: number }[];
   sectors: { sector: string; count: number; issue_size_cr: number }[];
   issue_sizes: { bucket: string; count: number }[];
-  freshness: { latest_record_update: string | null; stale_financials: string[] };
+  recent_changes: (FieldChangeRow & { company_name: string | null })[];
+  sources: SourceHealth[];
+  freshness: { latest_record_update: string | null; last_successful_sync_at: string | null; last_successful_job: string | null };
   watchlist: IpoSummary[];
   recent_reports: { id: number; title: string; ipo_id: number | null; generator: string; created_at: string }[];
 }
 
-export interface Prediction {
-  available: boolean;
-  reason?: string;
-  warning: string;
-  probability_positive?: number;
-  expected_return_pct?: number;
-  model_version?: string;
+
+export interface SourceHealth {
+  key: string;
+  name: string;
+  base_url: string;
+  authority: string;
+  access_mode: "automatic" | "manual_only";
+  health_status: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  requests_made: number;
+  is_stale: boolean;
+  notes: string | null;
+}
+
+export interface FieldChangeRow {
+  ipo_id: number;
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+  source_key: string;
+  changed_at: string;
+}
+
+export interface SchedulerStatus {
+  running: boolean;
+  enabled: boolean;
+  note?: string;
+  jobs?: { id: string; next_run_at: string | null; interval_minutes: number }[];
+}
+
+export interface FreshnessReport {
+  last_successful_sync_at: string | null;
+  last_successful_job: string | null;
+  sources: SourceHealth[];
+  stale_records: { id: number; company_name: string; status: IpoStatus; reasons: string[] }[];
+  missing_critical_fields: { id: number; company_name: string; status: IpoStatus; missing: string[] }[];
+  recent_changes: FieldChangeRow[];
+  scheduler: SchedulerStatus;
+}
+
+export interface SyncJob {
+  id: number;
+  job_type: string;
+  trigger: string;
+  status: "running" | "success" | "partial" | "failed" | "skipped";
+  started_at: string;
+  finished_at: string | null;
+  records_discovered: number;
+  records_created: number;
+  records_updated: number;
+  fields_changed: number;
+  requests_made: number;
+  errors: Record<string, unknown>[];
+  detail: Record<string, unknown>;
+  warning_count: number;
+}
+
+export interface SyncStatus {
+  scheduler: SchedulerStatus;
+  intervals_minutes: Record<string, number>;
+  jobs: SyncJob[];
+  sources: SourceHealth[];
+}
+
+export interface MarketOverview {
+  as_of: string;
+  counts: Partial<Record<IpoStatus, number>>;
+  open: IpoSummary[];
+  opening_soon: IpoSummary[];
+  listing_soon: IpoSummary[];
+  recently_listed: IpoSummary[];
+  listing_stats_30d: { count_with_verified_return: number; positive: number; negative: number; median_return_pct: number | null; note: string };
+  data: { last_successful_sync_at: string | null; stale_records: number; live_records: number; demo_records_included: boolean };
+}
+
+export interface SubscriptionDetail {
+  ipo_id: number;
+  company_name: string;
+  status: IpoStatus;
+  latest_as_of: string | null;
+  timezone: string | null;
+  basis_note: string;
+  latest: { category: string; times_subscribed: number; shares_offered: number | null; shares_bid: number | null; data_status: DataStatus }[];
+  history: { as_of: string; category: string; times_subscribed: number; basis: string }[];
+  freshness: Freshness;
+  source_url: string | null;
+}
+
+export interface FieldProvenance {
+  value: unknown;
+  source_key: string;
+  source_url: string | null;
+  first_seen_at: string;
+  last_verified_at: string;
+  data_status: DataStatus;
+  basis: string | null;
+  conflicts: number;
+}
+
+// ---------------------------------------------------------------- completeness, peers, history, industries, methodology, health
+export type FieldStatus = "available" | "estimated" | "unverified" | "requires_review" | "unavailable" | "not_applicable" | "pending" | "not_meaningful";
+
+export interface FieldState {
+  key: string;
+  label: string;
+  group: string;
+  status: FieldStatus;
+  value: unknown;
+  unit: string | null;
+  source: string | null;
+  period: string | null;
+  as_of: string | null;
+  data_status: string | null;
+  stale: boolean;
+  reason: string | null;
+  extra: Record<string, unknown>;
+}
+
+export interface PipelineStage { stage: string; label: string; status: "done" | "pending" | "failed"; detail: string | null }
+
+export interface Completeness {
+  ipo_id: number;
+  stage: IpoStage;
+  overall_pct: number;
+  readiness: { level: Readiness; label: string; reason: string | null };
+  groups: { key: string; label: string; pct: number | null; available: number; partial: number; missing: number; not_applicable: number; pending: number; fields: FieldState[] }[];
+  pipeline: PipelineStage[];
+  sources_tried: { source: string; status: string; detail: string | null; document_id?: number; url?: string | null }[];
+  missing_important: FieldState[];
+  computed_at: string;
+  note: string;
+}
+
+export interface PeerRow extends Peer {
+  price_age_days: number | null;
+  stale: boolean;
+  used_in_median: boolean;
+}
+
+export interface PeerAnalysis {
+  ipo_id: number;
+  peers: PeerRow[];
+  benchmarks: PeerSummary;
+  ipo_multiples: { pe: number | null; pb: number | null; price_basis: string | null; pe_vs_median_pct: number | null; pb_vs_median_pct: number | null };
+  selection_rationale: string;
+  similar_ipos: { id: number; company_name: string; issue_type: string; open_date: string | null; issue_size_cr: number | null; composite: number | null;
+                  risk: number | null; pe: number | null; completeness_pct: number | null }[];
+  similar_basis: string | null;
+  warnings: string[];
+  note: string;
+}
+
+export interface OutcomeStats { n: number; mean: number | null; median: number | null; positive_share: number | null; min: number | null; max: number | null }
+
+export interface HistoryRow {
+  id: number;
+  company_name: string;
+  sector: string;
+  issue_type: "mainboard" | "sme";
+  listing_date: string | null;
+  issue_size_cr: number | null;
+  final_issue_price: number | null;
+  listing_open: number | null;
+  listing_high: number | null;
+  listing_low: number | null;
+  listing_close: number | null;
+  listing_gain_pct: number | null;
+  listing_close_return_pct: number | null;
+  listing_high_return_pct: number | null;
+  listing_low_return_pct: number | null;
+  listing_data_status: DataStatus | null;
+  subscription_total: number | null;
+  subscription_as_of: string | null;
+  pre_listing_score: number | null;
+  score_classification: string | null;
+  risk: number | null;
+  score_available: boolean;
+  point_in_time_ok: boolean | null;
+  point_in_time_note: string | null;
+  data_mode: string;
+}
+
+export interface HistoryResponse {
+  items: HistoryRow[];
+  count: number;
+  with_listing_price: number;
+  summary: { listing_gain: OutcomeStats; listing_close_return: OutcomeStats };
+  by_sector: (OutcomeStats & { group: string; median_close_return: number | null })[];
+  by_issue_type: (OutcomeStats & { group: string; median_close_return: number | null })[];
+  by_issue_size: (OutcomeStats & { group: string })[];
+  score_vs_outcome: { pairs: { score: number; listing_gain_pct: number }[]; n: number; spearman_rho: number | null; note: string };
+  formulas: Record<string, string>;
+  source: string;
+}
+
+export interface IndustryProfile {
+  key: string;
+  label: string;
+  not_applicable: string[];
+  reasons: Record<string, string>;
+  not_applicable_components: string[];
+  weights: Record<string, Record<string, number>>;
+  ranges: Record<string, Record<string, number | string>>;
+}
+
+export interface IndustriesResponse {
+  sectors: { sector: string; profile: string; ipos: number; scored: number; benchmarks: Record<string, { median: number; n: number }>; indicative_only: boolean }[];
+  profiles: IndustryProfile[];
+  note: string;
+}
+
+export interface MethodologyResponse {
+  active_version: string;
+  description: string;
+  config: {
+    version: string;
+    weights: Record<string, Record<string, number>>;
+    ranges: Record<string, Record<string, number | string>>;
+    risk_ranges: Record<string, Record<string, number | string>>;
+    coverage: { component_min: number; overall_min: number; required_components: string[]; min_annual_periods: number };
+    peers: { min_peers: number };
+    usable_statuses: string[];
+    classification: [number, string][];
+    risk_levels: [number, string][];
+    profiles: Record<string, Omit<IndustryProfile, "key">>;
+  };
+  formulas: Record<string, string>;
+  component_labels: Record<string, string>;
+  disclaimer: string;
+  parser_version: string;
+  versions: { version: string; is_active: boolean; created_at: string; description: string }[];
+}
+
+export interface FieldSpec {
+  key: string; label: string; group: string; group_label: string; dtype: string; unit: string | null; primary: string; secondary: string[];
+  normalization: string; validation: string; refresh: string; stale_after_hours: number | null; fallback: string; stages: string[];
+}
+
+export interface FieldRegistry { groups: Record<string, string>; group_weights: Record<string, number>; fields: FieldSpec[] }
+
+export interface SystemHealth {
+  as_of: string;
+  scheduler: SchedulerStatus;
+  sources: SourceHealth[];
+  jobs_24h: { job_type: string; runs: number; success: number; partial: number; failed: number; skipped: number; requests: number;
+              last_status: string | null; last_finished_at: string | null; last_error: string | null }[];
+  documents: { by_source_and_status: Record<string, Record<string, number>>; total: number; parser_version: string; awaiting_reprocessing: number;
+               retained_mb: number; storage_limit_mb: number; ocr_available: boolean; ocr_enabled: boolean; max_attempts: number };
+  dead_letters: { document_id: number; ipo_id: number | null; title: string; attempts: number; error: string | null }[];
+  backing_off: { document_id: number; ipo_id: number | null; title: string; attempts: number; next_attempt_at: string | null; error: string | null }[];
+  pipeline_funnel: { stage: string; done: number; failed: number; pending: number }[];
+  completeness: { ipos: number; computed: number; median: number | null; below_50: number };
+  integrity: { statements_requiring_review: number; field_conflicts: number; stale_live_issues: { ipo_id: number; company_name: string; last_verified_at: string | null }[] };
+  hosting_note: string;
+  problems?: { level: "warning" | "error"; code: string; message: string }[];
+  backups?: { enabled: boolean; every_hours: number; keep: number; count: number; last_at: string | null };
 }

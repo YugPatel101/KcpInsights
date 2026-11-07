@@ -131,6 +131,11 @@ class FinancialIn(_Strict):
     total_equity: float | None = None
     current_assets: float | None = None
     current_liabilities: float | None = None
+    other_income: float | None = None
+    depreciation: float | None = Field(default=None, ge=0)
+    pbt: float | None = None
+    inventory: float | None = Field(default=None, ge=0)
+    basis: Literal["consolidated", "standalone", "unknown"] = "unknown"
     source_key: str
 
 
@@ -477,6 +482,9 @@ def commit_bundle(
     for w in rep.warnings[:500]:
         db.add(IngestionLog(dataset_id=ds.id, level="warning", message=f"{w['where']}: {w['message']}"[:2000]))
     db.commit()
+    from app.services.ipo_service import refresh_scores  # imported data changes scores: store them now, not on the next read
+
+    refresh_scores(db)
     return {"dataset_id": ds.id, "counts": counts, "report": rep.as_dict()}
 
 
@@ -616,6 +624,10 @@ def commit_financial_rows(db: Session, rows: list[dict[str, Any]], rep: Report, 
     ds.record_counts = {"financials": inserted, "rows": len(rows)}
     ds.validation_report = rep.as_dict()
     db.commit()
+    from app.services.ipo_service import refresh_scores
+
+    companies = {r["company_id"] for r in rows}
+    refresh_scores(db, set(db.execute(select(IPOIssue.id).where(IPOIssue.company_id.in_(companies))).scalars()))
     return {"dataset_id": ds.id, "counts": ds.record_counts, "report": rep.as_dict()}
 
 

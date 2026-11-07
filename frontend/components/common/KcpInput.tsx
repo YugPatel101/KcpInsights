@@ -9,7 +9,7 @@ export default function KcpInput({ label, error, type = "text", className, ...pr
   const id = useId();
   return (
     <div>
-      <label htmlFor={id} className="mb-2 block text-sm font-medium text-slate-300">
+      <label htmlFor={id} className="mb-2 block text-sm font-medium text-ink-2">
         {label}
       </label>
 
@@ -18,13 +18,13 @@ export default function KcpInput({ label, error, type = "text", className, ...pr
         type={type}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-err` : undefined}
-        className={`w-full rounded-xl border bg-black/30 px-4 py-3 text-white outline-none transition-all duration-300 placeholder:text-slate-500 focus:bg-black/50 ${
-          error ? "border-rose-500/60 focus:border-rose-400" : "border-white/10 focus:border-blue-400"
+        className={`w-full rounded-xl border bg-surface px-4 py-3 text-ink outline-none transition-all duration-300 placeholder:text-ink-3 focus:bg-surface ${
+          error ? "border-neg/60 focus:border-neg" : "border-line focus:border-brand"
         } ${className ?? ""}`}
         {...props}
       />
       {error && (
-        <p id={`${id}-err`} className="mt-1.5 text-xs text-rose-300">
+        <p id={`${id}-err`} className="mt-1.5 text-xs text-neg-ink">
           {error}
         </p>
       )}
