@@ -356,7 +356,7 @@ def process(db: Session, doc: SourceDocument, *, rescore: bool = True) -> dict[s
                 method = "text+ocr" if ocr_pages else "text"
             peers = parse_peers(pdf, texts, ipo.company.name)
             facts = extract_disclosures(pdf, texts)
-            terms = extract_offer_terms(texts)
+            terms = extract_offer_terms(texts, *known_intermediaries(db))
             industry = classify_industry(texts, ipo.company.name)
             kpis = lender_kpis(pdf, texts) if industry.profile in ("lender", "insurer") else {}
         stats = StoreStats()
@@ -400,6 +400,17 @@ def process(db: Session, doc: SourceDocument, *, rescore: bool = True) -> dict[s
         return {"document_id": doc.id, "status": "failed", "error": doc.extraction_error}
 
 
+def known_intermediaries(db: Session) -> tuple[list[str], list[str]]:
+    """Registrars and lead managers named on NSE issue pages so far (to recognise them on draft documents' covers)."""
+    import re as _re
+
+    regs = [r for (r,) in db.execute(select(IPOIssue.registrar).where(IPOIssue.registrar.is_not(None), IPOIssue.nse_symbol.is_not(None)).distinct())]
+    mgrs = sorted({p.strip() for (lm,) in db.execute(select(IPOIssue.lead_managers).where(IPOIssue.lead_managers.is_not(None),
+                                                                                         IPOIssue.nse_symbol.is_not(None)))
+                   for p in _re.split(r",|\band\b", lm or "") if p.strip()})
+    return regs, mgrs
+
+
 def best_document(db: Session, ipo: IPOIssue) -> SourceDocument | None:
     """The stored offer document to read issue terms from: an RHP before a DRHP, the NSE copy before SEBI's, newest first."""
     docs = db.execute(select(SourceDocument).where(SourceDocument.ipo_id == ipo.id, SourceDocument.source_key.in_(DOC_SOURCES),
@@ -426,7 +437,7 @@ def reread_offer_terms(db: Session, ipo: IPOIssue) -> bool:
             return False
         texts = [p.get_text() for p in pdf]
         facts = extract_disclosures(pdf, texts)
-        terms = extract_offer_terms(texts)
+        terms = extract_offer_terms(texts, *known_intermediaries(db))
     stats = StoreStats()
     store_facts(db, ipo, doc, facts, stats)
     store_offer_terms(db, ipo, doc, terms, stats)

@@ -310,6 +310,13 @@ def store_offer_terms(db: Session, ipo: IPOIssue, doc: SourceDocument, terms: di
         if term is not None:
             set_field(db, ipo, fld, float(term.value) if fld in ("face_value", "promoter_holding_pre_pct") else term.value, source_key=key,
                       source_url=url, status="verified", basis=term.basis or f"offer document p{term.page}", stats=st)
+    # registrar and lead managers from a draft document, only while NSE has not published them (NSE's values then replace them)
+    if ipo.nse_symbol is None:
+        for fld in ("registrar", "lead_managers"):
+            term = terms.get(fld)
+            if term is not None and getattr(ipo, fld) is None:
+                set_field(db, ipo, fld, term.value, source_key=key, source_url=url, status="verified",
+                          basis=term.basis or "named on the cover page", stats=st)
     objects = terms.get("objects_of_issue")
     if objects is not None and ipo.data_mode == "source":
         ipo.use_of_proceeds = objects.value

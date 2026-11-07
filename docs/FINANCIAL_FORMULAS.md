@@ -130,6 +130,25 @@ statement is the one whose profit before tax agrees with the chosen P&L in the m
 Never computed from a price band; the bhavcopy's previous close on listing day must equal the issue
 price within 0.5 %, otherwise the listing price is not applied.
 
+## Issue facts filled by calculation (shown with their method; never scored)
+
+| Fact | Formula | Status shown |
+|---|---|---|
+| Shares offered to bidders | NSE's list figure, else NSE's consolidated bid total stored while open, else shares in the issue − anchor portion printed in NSE's issue-size sentence | verified / derived |
+| Final issue price (closed, not yet listed) | upper end of the price band — every one of the listed book-built issues on record (115 of 115) priced there | estimated, with that base rate |
+| P/E on pre-issue EPS when no EPS line is printed | price ÷ (PAT ÷ shares before the issue) | as the statement (verified / unverified) |
+| Promoter holding after an issue with an offer for sale (before the listing filing) | range: (promoter shares − OFS shares) ÷ post-issue shares … promoter shares ÷ post-issue shares; promoter shares = pre-issue % × pre-issue shares | estimated range |
+| Promoter holding after the issue, no identifiable promoter | 0 | derived |
+| Valuation vs listed peers | issue P/E ÷ peer-median P/E − 1 | estimated |
+| Price at the peer-median P/E | issue price × peer-median P/E ÷ issue P/E — a comparison, not a forecast | estimated |
+| Indicative equity value (no price yet) | latest verified PAT × peer-median P/E | estimated |
+| Proposed fresh issue / offer for sale / total (draft documents) | as printed on the cover; parts must add up to the total where all are printed | proposed |
+| Registrar, lead managers (draft documents) | names known from NSE records found on the cover (a manager never seen before is not listed) | proposed |
+
+Not calculable, and shown as pending with the reason: a price band, lot size or ISIN before the company announces
+them, a listing price before listing, and anything that needs statements the offer document does not print in a
+readable form.
+
 ## Normalisation and scores
 
 See [SCORING_METHODOLOGY.md](SCORING_METHODOLOGY.md) §2–§6.

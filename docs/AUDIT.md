@@ -161,6 +161,26 @@ Example: BLS Polymers — balance sheet and cash flow previously taken from the 
 check, cash-flow PBT different from the restated P&L); now all four periods verified from the restated statements,
 fundamental score 74.9, verified P/E 34.5x at the issue price, completeness 85%.
 
+## Calculated and estimated issue facts (7 Nov 2026)
+
+Request: fill every field, by calculation or estimate where no source publishes it. Rule kept: a calculated value
+shows its formula, an estimate says *estimated* (or *proposed* for draft-document terms) with its method and base
+rate, and none of them enters a score. Fields that cannot exist yet (a price band or ISIN before the company
+announces them, a listing price before listing) stay *pending* with the reason.
+
+| Fact | Before | After (calculated / estimated) |
+|---|---|---|
+| Shares offered to bidders | 8 | **109** (NSE bid data, or total − anchor portion) |
+| P/E on pre-issue EPS | 69 | **84** (PAT ÷ shares where no EPS line is printed) |
+| Promoter holding after the issue | 114 | **119** (ranges around an offer for sale; 0 with no promoter) |
+| Fresh issue / offer for sale | 119 | **137** (proposed terms from draft prospectuses) |
+| Issue size · total shares in the issue | 121 · 120 | **127 · 129** |
+| Registrar · lead managers | 121 · 121 | **141 · 138** (draft covers matched against known names) |
+| Final issue price | 117 | **119** (upper band before listing; 115 of 115 listed book-built issues priced there) |
+| Valuation vs listed peers · price at the peer median | — | **20 · 20** (+6 indicative values before a price) |
+| Still pending by nature (pipeline: price band, lot, ISIN, market cap) | — | 20 each, with the reason |
+| Peer comparison unavailable | — | 114: the prospectus peer table has fewer than two usable P/Es or failed its column check |
+
 ## Remaining limitations (not fixed)
 
 * BSE refuses automated requests; BSE-only issues need a manual import.

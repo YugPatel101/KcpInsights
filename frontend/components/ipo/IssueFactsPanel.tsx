@@ -6,8 +6,8 @@ import type { IpoDetail, IssueFact } from "@/lib/types";
 
 const GROUPS: { title: string; keys: string[] }[] = [
   { title: "Offer", keys: ["issue_method", "price_band", "final_issue_price", "face_value", "lot_size", "lot_value", "issue_size", "issue_split", "total_shares", "shares_offered"] },
-  { title: "Shares, valuation & ownership", keys: ["pre_issue_shares", "post_issue_shares", "market_cap", "pe_pre", "pe_post", "promoter_holding_pre",
-    "promoter_holding_post", "promoter_holding_latest", "promoters"] },
+  { title: "Shares, valuation & ownership", keys: ["pre_issue_shares", "post_issue_shares", "market_cap", "pe_pre", "pe_post", "peer_premium", "peer_price",
+    "peer_value", "promoter_holding_pre", "promoter_holding_post", "promoter_holding_latest", "promoters"] },
   { title: "Listing & intermediaries", keys: ["listing_exchanges", "isin", "registrar", "lead_managers", "website"] },
 ];
 
@@ -31,13 +31,21 @@ function display(f: IssueFact): React.ReactNode {
       return shares(v as number);
     case "pct":
       return fmtPct(v as number, 2);
+    case "pct_signed":
+      return `${fmtPct(Math.abs(v as number), 1)} ${(v as number) >= 0 ? "above" : "below"}`;
+    case "pct_range": {
+      const [lo, hi] = v as number[];
+      return `${fmtPct(lo, 2)} – ${fmtPct(hi, 2)}`;
+    }
     case "x":
       return `${fmtNum(v as number, 2)}x`;
     case "list":
       return (v as string[]).join(", ");
     case "split": {
       const s = v as { fresh_cr: number | null; ofs_cr: number | null; fresh_shares?: number | null; ofs_shares?: number | null };
-      const part = (cr: number | null, sh?: number | null) => (cr === 0 ? "nil" : `${fmtCr(cr, 2)}${sh ? ` (${fmtInt(sh)} sh)` : ""}`);
+      // a draft document can print the share count while the rupee value is set with the price ("[●]")
+      const part = (cr: number | null, sh?: number | null) =>
+        cr === 0 || (cr === null && sh === 0) ? "nil" : cr === null ? (sh ? `${fmtInt(sh)} shares` : "—") : `${fmtCr(cr, 2)}${sh ? ` (${fmtInt(sh)} sh)` : ""}`;
       return `${part(s.fresh_cr, s.fresh_shares)} / ${part(s.ofs_cr, s.ofs_shares)}`;
     }
     case "url":
@@ -65,6 +73,7 @@ function Provenance({ f }: { f: IssueFact }) {
     <span className="text-ink-3">
       {f.status === "estimated" && <span className="mr-1 text-warn-ink">estimate ·</span>}
       {f.status === "unverified" && <span className="mr-1 text-warn-ink">unverified ·</span>}
+      {f.status === "proposed" && <span className="mr-1 text-brand-ink">proposed ·</span>}
       {f.status === "derived" && <span className="mr-1">derived ·</span>}
       {f.source}
       {page && <>{fromDocument ? " " : " · "}{page}</>}

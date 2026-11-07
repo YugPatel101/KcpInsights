@@ -32,7 +32,10 @@ No paid services, API keys or AI models; no manual data entry. Runs fully on one
   statements is labelled unverified and never scored), promoter holding before and
   after the issue, promoters, listing exchanges, ISIN, registrar, lead managers, website and the objects of
   the issue — each with its source (NSE, the offer document page, an NSE filing, or a stated derivation) or
-  the reason it is empty.
+  the reason it is empty. Where no source publishes a value yet, a calculation fills it with its method shown:
+  bidder shares, the final-price estimate before listing (with its base rate), a promoter-holding range around an
+  offer for sale, valuation against listed peers, and the proposed offer from a draft prospectus — labelled
+  *estimated* or *proposed* and never used in scores.
 * **Data completeness** — 60 registry fields per IPO, each available / estimated / unverified /
   unavailable (with reason) / not applicable / not yet expected; analysis readiness; pipeline stage.
 * **Listing history** — listing-day open, high, low, close from the official bhavcopy; listing gain and
@@ -49,7 +52,7 @@ No paid services, API keys or AI models; no manual data entry. Runs fully on one
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2, Alembic, APScheduler, httpx, PyMuPDF, Tesseract (optional), Argon2 |
 | Database | SQLite (WAL) |
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Recharts 3, Zod |
-| Quality | pytest (129), vitest (14), Playwright end-to-end (24, installed Chrome), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
+| Quality | pytest (136), vitest (14), Playwright end-to-end (24, installed Chrome), ruff (incl. bandit rules), mypy, ESLint, TypeScript |
 
 ## Architecture
 

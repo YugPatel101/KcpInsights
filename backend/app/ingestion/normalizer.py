@@ -175,6 +175,23 @@ def parse_issue_components(text: object) -> dict[str, float] | None:
     return out
 
 
+_PORTION = re.compile(r"\b(anchor|market maker|employee)\b[^()\d]{0,80}?(\d{1,3}(?:,\d{2,3})+|\d{4,})\s*equity shares", re.IGNORECASE)
+
+
+def parse_reserved_portions(text: object) -> dict[str, float]:
+    """Portions printed inside the NSE issue-size sentence: ``anchor``, ``market_maker`` and ``employee`` share counts.
+
+    "(including Anchor reservation portion of 51,00,000 Equity Shares)" -> {"anchor": 5100000.0}. Only counts printed
+    in shares are read; the first mention of each portion wins.
+    """
+    out: dict[str, float] = {}
+    if not isinstance(text, str):
+        return out
+    for m in _PORTION.finditer(re.sub(r"\s+", " ", text)):
+        out.setdefault(m.group(1).lower().replace(" ", "_"), float(m.group(2).replace(",", "")))
+    return out
+
+
 def strip_html(value: object) -> str | None:
     if not isinstance(value, str):
         return None

@@ -199,7 +199,7 @@ export interface DocumentInfo {
   file_url?: string | null;
 }
 
-export type IssueFactUnit = "text" | "inr" | "inr_range" | "cr" | "shares" | "pct" | "x" | "list" | "url" | "split";
+export type IssueFactUnit = "text" | "inr" | "inr_range" | "cr" | "shares" | "pct" | "pct_range" | "pct_signed" | "x" | "list" | "url" | "split";
 
 /** One key issue fact with its source and status, or the reason it is missing (GET /api/ipos/{id} → issue_facts). */
 export interface IssueFact {
@@ -207,7 +207,7 @@ export interface IssueFact {
   label: string;
   value: number | string | string[] | number[] | { fresh_cr: number | null; ofs_cr: number | null; fresh_shares?: number | null; ofs_shares?: number | null } | null;
   unit: IssueFactUnit;
-  status: "verified" | "estimated" | "derived" | "unverified" | "unavailable" | "pending" | string;
+  status: "verified" | "estimated" | "derived" | "proposed" | "unverified" | "unavailable" | "pending" | string;
   source?: string | null;
   basis?: string | null;
   page?: number | null;

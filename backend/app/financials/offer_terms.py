@@ -15,7 +15,7 @@ from typing import Any
 from app.financials.disclosures import Disclosure
 from app.financials.statement_parser import UNIT_TO_CRORE, detect_unit
 
-EXTRACTOR_VERSION = "1.2"
+EXTRACTOR_VERSION = "1.3"
 
 _WS = re.compile(r"\s+")
 _RS = r"(?:₹|`|Rs\.?|Re\.?|INR)\s?"  # "`" is how PDFs set in the Rupee Foradian font encode ₹
@@ -149,6 +149,96 @@ def contact(texts: list[str]) -> dict[str, Disclosure]:
             em = re.search(r"E-?mail(?: id)?\s?:?\s?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", flat, re.I)
             if em and not any(em.group(1).lower().endswith(s) for s in _SKIP_HOSTS):
                 out["email"] = Disclosure("email", em.group(1).lower(), i + 1, em.group(0))
+    return out
+
+
+# ---------------------------------------------------------------------------- proposed offer (cover page)
+_OFFER_CELL = re.compile(r"(?:up to\s+)?(\d{1,3}(?:,\d{2,3})+|\d{4,}|\[[●•]\])\s+equity shares\b.{0,120}?aggregating\s+(?:up\s+)?to\s+"
+                         + _RS + r"\s?(\d[\d,]*(?:\.\d+)?|\[[●•]\])\s?(million|lakhs?|crores?)?|\bnot applicable\b|\bnil\b", re.I)
+
+
+def proposed_offer(texts: list[str]) -> Disclosure | None:
+    """The offer as the cover page states it: fresh issue, offer for sale and total, each in shares and/or rupees.
+
+    SEBI's cover format prints three cells in this order. A figure not yet determined ('[●]') stays None. When shares
+    (or rupees) are printed for all three cells they must add up; otherwise the reading is refused.
+    """
+    for i, t in enumerate(texts[:2]):
+        flat = _flat(t)
+        m = re.search(r"DETAILS OF (?:THE )?(?:OFFER|ISSUE)(.{0,1600}?)(?:The (?:Offer|Issue) is being made|$)", flat, re.I)
+        if not m:
+            continue
+        cells = list(_OFFER_CELL.finditer(m.group(1)))
+        if len(cells) < 3:
+            continue
+        parsed: list[tuple[float | None, float | None]] = []
+        for c in cells[:3]:
+            if c.group(1) is None:  # "Not applicable" / "Nil"
+                parsed.append((0.0, 0.0))
+                continue
+            shares = None if c.group(1).startswith("[") else float(c.group(1).replace(",", ""))
+            amount = None
+            if not c.group(2).startswith("[") and c.group(3):
+                factor = UNIT_TO_CRORE.get(detect_unit("₹ in " + c.group(3)) or "")
+                amount = round(float(c.group(2).replace(",", "")) * factor, 4) if factor else None
+            parsed.append((shares, amount))
+        (fs, fa), (os_, oa), (ts, ta) = parsed
+        for part1, part2, whole in ((fs, os_, ts), (fa, oa, ta)):
+            if part1 is not None and part2 is not None and whole is not None and abs(part1 + part2 - whole) > max(1.0, 0.001 * whole):
+                return None  # the printed parts do not add up: not read
+        value = {"fresh_shares": fs, "fresh_cr": fa, "ofs_shares": os_, "ofs_cr": oa, "total_shares": ts, "total_cr": ta}
+        if all(v is None for v in value.values()):
+            continue
+        return Disclosure("proposed_offer", value, i + 1, m.group(0)[:400], "offer size as stated on the cover page")
+    return None
+
+
+# ---------------------------------------------------------------------------- intermediaries (draft documents)
+# registrars to an issue (a short, stable list); names on NSE records are added by the caller
+REGISTRARS = ("KFin Technologies Limited", "MUFG Intime India Private Limited", "Link Intime India Private Limited",
+              "Bigshare Services Private Limited", "Cameo Corporate Services Limited", "Skyline Financial Services Private Limited",
+              "Purva Sharegistry (India) Private Limited", "Maashitla Securities Private Limited", "Mudra RTA Ventures Private Limited",
+              "MAS Services Limited", "Integrated Registry Management Services Private Limited")
+# words that cannot identify a lead manager on their own ("Capital Markets" is part of many names)
+_GENERIC_WORDS = {"capital", "markets", "market", "securities", "financial", "finance", "services", "advisors", "advisers", "advisory",
+                  "investment", "investments", "management", "wealth", "broking", "brokers", "company", "corporate", "consultants", "&", "and"}
+_SUFFIX = re.compile(r"\b(?:private|pvt|limited|ltd|llp|india|\(india\))\b\.?", re.I)
+
+
+def name_core(name: str) -> str:
+    """A company name reduced for matching: lower case, no legal suffixes or punctuation ('KFin Technologies Limited' -> 'kfin technologies')."""
+    s = re.sub(r"\(formerly[^)]*\)", " ", name, flags=re.I)
+    s = _SUFFIX.sub(" ", s.lower())
+    return " ".join(re.sub(r"[^a-z0-9& ]+", " ", s).split())
+
+
+def cover_intermediaries(texts: list[str], registrars: list[str], managers: list[str]) -> dict[str, Disclosure]:
+    """Registrar and book-running lead managers named on the cover page, by matching names already known.
+
+    Draft documents set these in narrow cover tables that interleave when read, so names are not parsed from the layout:
+    each known name (at least two significant words) is looked for on the cover instead. A manager never seen before
+    is therefore not listed — the basis says so.
+    """
+    cover = " " + " ".join(name_core(_flat(t)) for t in texts[:2]) + " "
+    out: dict[str, Disclosure] = {}
+    reg_cores: dict[str, str] = {}
+    for n in registrars:
+        if len(name_core(n).split()) >= 2:
+            reg_cores.setdefault(name_core(n), n)
+    found_reg = [(cover.find(f" {c} "), n) for c, n in reg_cores.items() if f" {c} " in cover]
+    if found_reg:
+        name = min(found_reg)[1]
+        out["registrar"] = Disclosure("registrar", re.sub(r"\s*\(formerly[^)]*\)", "", name).strip(), 1, name, "named on the cover page")
+    seen: dict[str, tuple[int, str]] = {}
+    for n in managers:
+        c = name_core(n)
+        if len(c.split()) >= 2 and set(c.split()) - _GENERIC_WORDS and c not in reg_cores and f" {c} " in cover:
+            seen.setdefault(c, (cover.find(f" {c} "), n.strip()))
+    seen = {c: v for c, v in seen.items() if not any(c != o and f" {c} " in f" {o} " for o in seen)}  # inside a longer name found
+    if seen:
+        names = [n for _, n in sorted(seen.values())]
+        out["lead_managers"] = Disclosure("lead_managers", ", ".join(names), 1, "; ".join(names)[:300],
+                                          "named on the cover page; matched against lead managers on NSE records (one not seen before would be missing)")
     return out
 
 
@@ -411,11 +501,14 @@ def objects_of_issue(texts: list[str]) -> Disclosure | None:
     return listed[0] if listed else _ofs_objects(texts)
 
 
-def extract_offer_terms(texts: list[str]) -> dict[str, Disclosure]:
+def extract_offer_terms(texts: list[str], registrars: list[str] | None = None, managers: list[str] | None = None) -> dict[str, Disclosure]:
     out: dict[str, Disclosure] = {}
-    for fn in (face_value, issue_method, listing_exchanges, promoters, post_issue_shares, promoter_holding_pre, objects_of_issue):
+    for fn in (face_value, issue_method, listing_exchanges, promoters, post_issue_shares, promoter_holding_pre, objects_of_issue,
+               proposed_offer):
         d = fn(texts)
         if d is not None:
             out[d.key] = d
     out.update(contact(texts))
+    if managers is not None:
+        out.update(cover_intermediaries(texts, [*REGISTRARS, *(registrars or [])], managers))
     return out
